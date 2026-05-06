@@ -10,6 +10,18 @@ class AstraConfig:
     foil_alignment_mode: str = "trans"  # trans, ref, fluo
     fluo_multiplicative_constant: float = 1e-11
 
+    enable_auto_deglitch: bool = False
+    deglitch_threshold: float = 5.0
+    deglitch_window: int = 5
+    deglitch_method: str = "interpolate"
+    deglitch_min_energy: float | None = None
+    deglitch_max_energy: float | None = None
+
+    enable_manual_deglitch_range: bool = False
+    manual_deglitch_min_energy: float | None = None
+    manual_deglitch_max_energy: float | None = None
+    manual_deglitch_margin_points: int = 5
+
     pre1: float = -229.740
     pre2: float = -49.980
     norm1: float = 55.070

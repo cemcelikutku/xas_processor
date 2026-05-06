@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import numpy as np
-from scipy.interpolate import interp1d
+from scipy.interpolate import CubicSpline, interp1d
 from larch import Group
 from larch.xafs import pre_edge
 
@@ -13,6 +13,12 @@ from .alignment import find_best_shift
 from .grouping import group_samples
 from .export import save_two_col
 from .plotting import plot_overview, plot_replicate_qc
+
+
+AUTO_DEGLITCH_WARNING = (
+    "Automatic deglitching is intended for narrow point-like spikes. "
+    "Use manual range deglitching for broad artifacts."
+)
 
 
 def interpolate_to_grid(E_source, mu_source, E_target, kind="linear"):
@@ -113,6 +119,168 @@ def _run_pre_edge(energy, mu, config: AstraConfig) -> dict:
         "edge_step": edge_step,
         "e0": e0,
     }
+
+
+def auto_deglitch(energy, mu, config):
+    energy = np.asarray(energy, dtype=float)
+    mu = np.asarray(mu, dtype=float)
+    if not getattr(config, "enable_auto_deglitch", False):
+        return energy, mu, []
+
+    window_radius = int(getattr(config, "deglitch_window", 5))
+    if window_radius < 2:
+        window_radius = 2
+    threshold = float(getattr(config, "deglitch_threshold", 5.0))
+    min_energy = getattr(config, "deglitch_min_energy", None)
+    max_energy = getattr(config, "deglitch_max_energy", None)
+
+    n = len(energy)
+    if n < 5 or len(mu) != n:
+        return energy, mu, []
+
+    flags = np.zeros(n, dtype=bool)
+
+    local_point_residuals = np.full(n, np.nan, dtype=float)
+    for i in range(1, n - 1):
+        if not np.all(np.isfinite([energy[i - 1], energy[i], energy[i + 1], mu[i - 1], mu[i], mu[i + 1]])):
+            continue
+        if energy[i - 1] == energy[i + 1]:
+            continue
+        expected = np.interp(energy[i], [energy[i - 1], energy[i + 1]], [mu[i - 1], mu[i + 1]])
+        local_point_residuals[i] = mu[i] - expected
+
+    finite_residuals = local_point_residuals[np.isfinite(local_point_residuals)]
+    if finite_residuals.size == 0:
+        return energy, mu, []
+
+    finite_mu = mu[np.isfinite(mu)]
+    amplitude_floor = np.nanmax(np.abs(finite_mu)) * 1e-12 if finite_mu.size else 0.0
+    eps = max(np.finfo(float).eps, amplitude_floor)
+
+    for i in range(1, n - 1):
+        if min_energy is not None and energy[i] < min_energy:
+            continue
+        if max_energy is not None and energy[i] > max_energy:
+            continue
+        if not np.isfinite(local_point_residuals[i]):
+            continue
+
+        start = max(0, i - window_radius)
+        end = min(n, i + window_radius + 1)
+        window_residuals = local_point_residuals[start:end]
+        window_residuals = np.delete(window_residuals, i - start)
+        window_residuals = window_residuals[np.isfinite(window_residuals)]
+        if window_residuals.size < 3:
+            continue
+
+        local_med = np.median(window_residuals)
+        local_mad = np.median(np.abs(window_residuals - local_med))
+        scale = 1.4826 * local_mad
+        if not np.isfinite(scale) or scale <= 0:
+            scale = np.median(np.abs(window_residuals - local_med))
+        if not np.isfinite(scale) or scale <= 0:
+            local_mu = mu[start:end]
+            local_mu = np.delete(local_mu, i - start)
+            local_mu = local_mu[np.isfinite(local_mu)]
+            local_range = np.ptp(local_mu) if local_mu.size else 0.0
+            scale = max(local_range * 0.05, eps)
+
+        left_jump = mu[i] - mu[i - 1]
+        right_jump = mu[i + 1] - mu[i]
+        opposite_jumps = left_jump * right_jump < 0
+        returned_to_baseline = abs(mu[i + 1] - mu[i - 1]) <= max(3.0 * scale, abs(local_point_residuals[i]) * 0.5)
+        large_residual = abs(local_point_residuals[i] - local_med) > threshold * scale
+        large_jumps = min(abs(left_jump), abs(right_jump)) > threshold * scale * 0.5
+
+        if large_residual and large_jumps and opposite_jumps and returned_to_baseline:
+            flags[i] = True
+
+    neighbour_flags = np.zeros(n, dtype=bool)
+    neighbour_flags[1:] |= flags[:-1]
+    neighbour_flags[:-1] |= flags[1:]
+    flags &= ~neighbour_flags
+    flags[0] = False
+    flags[-1] = False
+
+    flagged_energies = energy[flags].tolist()
+    if not np.any(flags):
+        return energy, mu, []
+
+    good = ~flags
+    if np.count_nonzero(good) < 2:
+        return energy, mu, flagged_energies
+
+    cleaned_mu = np.array(mu, copy=True)
+    cleaned_mu[flags] = np.interp(energy[flags], energy[good], mu[good])
+
+    return energy, cleaned_mu, flagged_energies
+
+
+def manual_deglitch_range(energy, mu, config):
+    """Replace mu values in a specified energy range by interpolation from nearby neighbours."""
+    energy = np.asarray(energy, dtype=float)
+    mu = np.asarray(mu, dtype=float)
+    
+    if not getattr(config, "enable_manual_deglitch_range", False):
+        return energy, mu, []
+
+    min_energy = getattr(config, "manual_deglitch_min_energy", None)
+    max_energy = getattr(config, "manual_deglitch_max_energy", None)
+    margin_points = int(getattr(config, "manual_deglitch_margin_points", 5))
+    
+    if margin_points < 1:
+        margin_points = 1
+    if min_energy is None or max_energy is None or min_energy >= max_energy:
+        return energy, mu, []
+
+    n = len(energy)
+    if n == 0:
+        return energy, mu, []
+
+    # Identify points in the deglitch range
+    in_range = (energy >= min_energy) & (energy <= max_energy)
+    range_indices = np.where(in_range)[0]
+    
+    if len(range_indices) == 0:
+        return energy, mu, []
+
+    # Get leftmost and rightmost indices in range
+    left_idx = range_indices[0]
+    right_idx = range_indices[-1]
+
+    # Find margin points: points outside the range to use for interpolation
+    left_margin_start = max(0, left_idx - margin_points)
+    right_margin_end = min(n, right_idx + margin_points + 1)
+
+    # Collect neighbours for interpolation
+    left_neighbours_mask = (np.arange(n) >= left_margin_start) & (np.arange(n) < left_idx)
+    right_neighbours_mask = (np.arange(n) > right_idx) & (np.arange(n) < right_margin_end)
+    neighbours_mask = left_neighbours_mask | right_neighbours_mask
+
+    if not np.any(neighbours_mask):
+        # No neighbours available, cannot interpolate
+        return energy, mu, []
+
+    neighbour_indices = np.where(neighbours_mask)[0]
+    if len(neighbour_indices) < 2:
+        # Not enough neighbours for meaningful interpolation
+        return energy, mu, []
+
+    cleaned_mu = np.array(mu, copy=True)
+    manually_replaced = energy[in_range].tolist()
+
+    try:
+        # Try cubic spline
+        spline = CubicSpline(energy[neighbours_mask], mu[neighbours_mask], extrapolate=False)
+        interpolated = spline(energy[in_range])
+        if np.any(np.isnan(interpolated)):
+            raise ValueError("spline produced NaN values")
+        cleaned_mu[in_range] = interpolated
+    except Exception:
+        # Fallback to linear interpolation
+        cleaned_mu[in_range] = np.interp(energy[in_range], energy[neighbours_mask], mu[neighbours_mask])
+
+    return energy, cleaned_mu, manually_replaced
 
 
 def save_detector_raw_entry(entry: dict, output_dir: Path) -> Path:
@@ -375,6 +543,8 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
     bkgcorr_plot_records = []
     norm_plot_records = []
     plot_energy_range = (config.plot_energy_min, config.plot_energy_max)
+    total_auto_deglitched_points = 0
+    total_manual_range_interpolated_points = 0
 
     for (base_name, assigned_foil), scans in groups.items():
         log(f"Processing group: {base_name} ({len(scans)} scan(s))")
@@ -383,10 +553,26 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
         processed_spectra = []
         source_filenames = []
         detector_group_if = []
+        deglitch_records = []  # Collect deglitch info per replicate
 
         for s in scans:
             shifted_energy = s["energy"] + s["energy_shift_eV"]
             mu = get_signal(s, config.analysis_mode)
+            shifted_energy, mu, flagged_energies = auto_deglitch(shifted_energy, mu, config)
+            if flagged_energies:
+                log(f"Auto-interpolated {len(flagged_energies)} isolated spike point(s) in {s['filename']}")
+            
+            shifted_energy, mu, manually_replaced = manual_deglitch_range(shifted_energy, mu, config)
+            if manually_replaced:
+                log(f"Manual range-interpolated {len(manually_replaced)} point(s) in {s['filename']}")
+            
+            deglitch_records.append({
+                "filename": s["filename"],
+                "n_flagged_auto": len(flagged_energies),
+                "flagged_energies_auto": flagged_energies,
+                "n_replaced_manual": len(manually_replaced),
+                "replaced_energies_manual": manually_replaced,
+            })
             mu_interp = interpolate_to_grid(shifted_energy, mu, master_energy, kind=config.interp_kind)
             valid = np.isfinite(mu_interp)
             if np.count_nonzero(valid) < 0.9 * len(master_energy):
@@ -436,6 +622,9 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
 
         processed_array = processed_array[keep_mask]
         source_filenames = [name for name, keep in zip(source_filenames, keep_mask) if keep]
+        deglitch_records = [rec for rec, keep in zip(deglitch_records, keep_mask) if keep]
+        total_auto_deglitched_points += sum(r["n_flagged_auto"] for r in deglitch_records)
+        total_manual_range_interpolated_points += sum(r["n_replaced_manual"] for r in deglitch_records)
 
         # Recommended Athena workflow: merge μ(E) first, then normalize once on the
         # clean averaged spectrum. This gives a more reliable edge step and background
@@ -468,6 +657,14 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
             f"# Alignment source: {alignment_source}\n"
             f"# Normalization order nnorm: {config.nnorm}\n"
             f"# Normalize-before-average: False (merge-then-normalize)\n"
+            f"# Auto-deglitch enabled: {_config_bool(config, 'enable_auto_deglitch', False)}\n"
+            f"# Deglitch method: interpolate\n"
+            f"# Deglitch threshold: {getattr(config, 'deglitch_threshold', 'N/A')}\n"
+            f"# Deglitch window: {getattr(config, 'deglitch_window', 'N/A')}\n"
+            f"# {AUTO_DEGLITCH_WARNING}\n"
+            f"# Manual deglitch range enabled: {_config_bool(config, 'enable_manual_deglitch_range', False)}\n"
+            f"# Manual deglitch range: {getattr(config, 'manual_deglitch_min_energy', 'N/A')} - {getattr(config, 'manual_deglitch_max_energy', 'N/A')} eV\n"
+            f"# Manual deglitch margin points: {getattr(config, 'manual_deglitch_margin_points', 'N/A')}\n"
             f"# Mean edge_step: {mean_edge_step:.8g}\n"
             f"# Mean normalization E0: {mean_norm_e0:.8g}\n"
             f"# Shift rejection enabled: {enable_shift_rejection} threshold: {reject_shift_abs_eV} eV\n"
@@ -515,6 +712,27 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
         group_summary_rows.append([output_base, base_name, assigned_foil, str(len(processed_array)), source_filenames[0], source_filenames[-1]])
         std_str = "N/A" if not np.isfinite(std_edge_step) else f"{std_edge_step:.8g}"
         group_norm_metadata_rows.append([output_base, f"{mean_edge_step:.8g}", std_str, f"{mean_norm_e0:.8g}", str(config.nnorm)])
+
+        # Write deglitch log if any deglitching occurred
+        auto_enabled = _config_bool(config, "enable_auto_deglitch", False)
+        manual_enabled = _config_bool(config, "enable_manual_deglitch_range", False)
+        any_auto_flags = any(r["n_flagged_auto"] > 0 for r in deglitch_records)
+        any_manual_replaced = any(r["n_replaced_manual"] > 0 for r in deglitch_records)
+        
+        if (auto_enabled and any_auto_flags) or (manual_enabled and any_manual_replaced):
+            with open(output_dir / f"{output_base}_deglitch_log.dat", "w", encoding="utf-8") as f:
+                f.write("# Deglitch summary for group: {}\n".format(base_name))
+                f.write(f"# {AUTO_DEGLITCH_WARNING}\n")
+                f.write("# filename\tmethod\tn_processed\tenergies\n")
+                for rec in deglitch_records:
+                    # Write auto deglitch records
+                    if rec["n_flagged_auto"] > 0:
+                        flagged_str = " ".join(f"{e:.6f}" for e in rec["flagged_energies_auto"])
+                        f.write(f"{rec['filename']}\tauto_interpolate\t{rec['n_flagged_auto']}\t{flagged_str}\n")
+                    # Write manual deglitch records
+                    if rec["n_replaced_manual"] > 0:
+                        replaced_str = " ".join(f"{e:.6f}" for e in rec["replaced_energies_manual"])
+                        f.write(f"{rec['filename']}\tmanual_range_interpolate\t{rec['n_replaced_manual']}\t{replaced_str}\n")
 
     plot_files = []
     if plots_enabled:
@@ -568,6 +786,9 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
         f.write(f"Replicate outliers skipped: {len(auto_outlier_entries)}\n")
         f.write(f"Foils found: {len(foil_entries)}\n")
         f.write(f"Groups processed: {len(group_summary_rows)}\n")
+        f.write(f"Auto-deglitched points: {total_auto_deglitched_points}\n")
+        f.write(f"Manually range-interpolated points: {total_manual_range_interpolated_points}\n")
+        f.write(f"Deglitch note: {AUTO_DEGLITCH_WARNING}\n")
         f.write(f"Normalization order nnorm: {config.nnorm}\n")
         f.write("Normalize-before-average: False (merge μ(E) first, normalize merged spectrum)\n")
         f.write(f"Plots folder: {plots_dir}\n")
@@ -595,4 +816,6 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
         "manual_excluded": len(excluded_entries),
         "shift_rejected": len(auto_shift_rejected_entries),
         "auto_outliers": len(auto_outlier_entries),
+        "auto_deglitched_points": total_auto_deglitched_points,
+        "manual_range_interpolated_points": total_manual_range_interpolated_points,
     }

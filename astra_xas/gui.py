@@ -41,6 +41,19 @@ class AstraGui(tk.Tk):
         self.shift_min = tk.StringVar(value="-5.0")
         self.shift_max = tk.StringVar(value="5.0")
         self.fluo_factor = tk.StringVar(value="1e-11")
+        self.enable_deglitching = tk.BooleanVar(value=False)
+        self.deglitch_mode = tk.StringVar(value="automatic")
+        self.enable_auto_deglitch = tk.BooleanVar(value=False)
+        self.deglitch_method = tk.StringVar(value="interpolate")
+        self.deglitch_threshold = tk.StringVar(value="5.0")
+        self.deglitch_window = tk.StringVar(value="5")
+        self.deglitch_min_energy = tk.StringVar(value="")
+        self.deglitch_max_energy = tk.StringVar(value="")
+
+        self.enable_manual_deglitch_range = tk.BooleanVar(value=False)
+        self.manual_deglitch_min_energy = tk.StringVar(value="")
+        self.manual_deglitch_max_energy = tk.StringVar(value="")
+        self.manual_deglitch_margin_points = tk.StringVar(value="5")
 
         self.plot_detector_raw_overview = tk.BooleanVar(value=False)
         self.plot_processed_overview = tk.BooleanVar(value=True)
@@ -56,9 +69,15 @@ class AstraGui(tk.Tk):
         self._log_queue: queue.Queue[str] = queue.Queue()
         self._running = False
         self._suppress_log_until = 0
+        self._auto_deglitch_widgets = []
+        self._manual_deglitch_widgets = []
+        self._deglitch_mode_widgets = []
         self._build()
         self.alignment_source.trace_add("write", self._update_alignment_ui)
+        self.enable_deglitching.trace_add("write", self._update_deglitch_ui)
+        self.deglitch_mode.trace_add("write", self._update_deglitch_ui)
         self._update_alignment_ui()
+        self._update_deglitch_ui()
         self.after(100, self._drain_log_queue)
 
     def _build(self):
@@ -136,6 +155,7 @@ class AstraGui(tk.Tk):
         self._build_input_section(left)
         self._build_basic_section(left)
         self._build_advanced_section(left)
+        self._build_deglitch_section(left)
         self._build_plot_section(left)
         self._build_buttons(left)
         self._build_log_section(right)
@@ -248,6 +268,96 @@ class AstraGui(tk.Tk):
                 ttk.Entry(frame, textvariable=var2, width=14).grid(
                     row=r, column=3, sticky="w", padx=6, pady=3
                 )
+
+    def _build_deglitch_section(self, parent):
+        frame = ttk.LabelFrame(
+            parent,
+            text="3a. Deglitching",
+            padding=10,
+            style="Section.TLabelframe",
+        )
+        frame.pack(fill="x", pady=(0, 10))
+        frame.columnconfigure(1, weight=1)
+        frame.columnconfigure(3, weight=1)
+
+        ttk.Checkbutton(
+            frame,
+            text="Enable deglitching",
+            variable=self.enable_deglitching,
+        ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 8))
+
+        ttk.Label(frame, text="Mode").grid(row=1, column=0, sticky="w", pady=3)
+        mode_combo = ttk.Combobox(
+            frame,
+            textvariable=self.deglitch_mode,
+            values=("automatic", "manual", "both"),
+            width=14,
+            state="readonly",
+        )
+        mode_combo.grid(row=1, column=1, sticky="w", padx=6, pady=3)
+        self._deglitch_mode_widgets.append(mode_combo)
+
+        auto_label = ttk.Label(frame, text="Automatic point spikes")
+        auto_label.grid(row=2, column=0, columnspan=4, sticky="w", pady=(8, 3))
+        self._auto_deglitch_widgets.append(auto_label)
+
+        threshold_label = ttk.Label(frame, text="Threshold")
+        threshold_label.grid(row=3, column=0, sticky="w", pady=3)
+        threshold_entry = ttk.Entry(frame, textvariable=self.deglitch_threshold, width=14)
+        threshold_entry.grid(row=3, column=1, sticky="w", padx=6, pady=3)
+        self._auto_deglitch_widgets.extend([threshold_label, threshold_entry])
+
+        window_label = ttk.Label(frame, text="Window half-width")
+        window_label.grid(row=4, column=0, sticky="w", pady=3)
+        window_entry = ttk.Entry(frame, textvariable=self.deglitch_window, width=14)
+        window_entry.grid(
+            row=4, column=1, sticky="w", padx=6, pady=3
+        )
+        self._auto_deglitch_widgets.extend([window_label, window_entry])
+
+        auto_min_label = ttk.Label(frame, text="Min energy / eV")
+        auto_min_label.grid(row=4, column=2, sticky="w", padx=(10, 0), pady=3)
+        auto_min_entry = ttk.Entry(frame, textvariable=self.deglitch_min_energy, width=14)
+        auto_min_entry.grid(
+            row=4, column=3, sticky="w", padx=6, pady=3
+        )
+        self._auto_deglitch_widgets.extend([auto_min_label, auto_min_entry])
+
+        auto_max_label = ttk.Label(frame, text="Max energy / eV")
+        auto_max_label.grid(row=5, column=0, sticky="w", pady=3)
+        auto_max_entry = ttk.Entry(frame, textvariable=self.deglitch_max_energy, width=14)
+        auto_max_entry.grid(
+            row=5, column=1, sticky="w", padx=6, pady=3
+        )
+        self._auto_deglitch_widgets.extend([auto_max_label, auto_max_entry])
+
+        manual_label = ttk.Label(frame, text="Manual range")
+        manual_label.grid(row=6, column=0, columnspan=4, sticky="w", pady=(8, 3))
+        self._manual_deglitch_widgets.append(manual_label)
+
+        manual_min_label = ttk.Label(frame, text="Min energy / eV")
+        manual_min_label.grid(row=7, column=0, sticky="w", pady=3)
+        manual_min_entry = ttk.Entry(frame, textvariable=self.manual_deglitch_min_energy, width=14)
+        manual_min_entry.grid(
+            row=7, column=1, sticky="w", padx=6, pady=3
+        )
+        self._manual_deglitch_widgets.extend([manual_min_label, manual_min_entry])
+
+        manual_max_label = ttk.Label(frame, text="Max energy / eV")
+        manual_max_label.grid(row=7, column=2, sticky="w", padx=(10, 0), pady=3)
+        manual_max_entry = ttk.Entry(frame, textvariable=self.manual_deglitch_max_energy, width=14)
+        manual_max_entry.grid(
+            row=7, column=3, sticky="w", padx=6, pady=3
+        )
+        self._manual_deglitch_widgets.extend([manual_max_label, manual_max_entry])
+
+        margin_label = ttk.Label(frame, text="Margin points")
+        margin_label.grid(row=8, column=0, sticky="w", pady=3)
+        margin_entry = ttk.Entry(frame, textvariable=self.manual_deglitch_margin_points, width=14)
+        margin_entry.grid(
+            row=8, column=1, sticky="w", padx=6, pady=3
+        )
+        self._manual_deglitch_widgets.extend([margin_label, margin_entry])
 
     def _build_plot_section(self, parent):
         frame = ttk.LabelFrame(parent, text="4. Automatic plots", padding=10, style="Section.TLabelframe")
@@ -373,6 +483,44 @@ class AstraGui(tk.Tk):
             else:
                 self.foil_keyword_entry.configure(state="normal")
 
+    def _deglitch_enable_flags(self) -> tuple[bool, bool]:
+        if not self.enable_deglitching.get():
+            return False, False
+        mode = self.deglitch_mode.get()
+        if mode not in {"automatic", "manual", "both"}:
+            mode = "automatic"
+        return mode in {"automatic", "both"}, mode in {"manual", "both"}
+
+    def _sync_deglitch_backend_vars(self):
+        auto_enabled, manual_enabled = self._deglitch_enable_flags()
+        self.enable_auto_deglitch.set(auto_enabled)
+        self.enable_manual_deglitch_range.set(manual_enabled)
+
+    def _set_widget_state(self, widgets, state: str):
+        for widget in widgets:
+            try:
+                widget.configure(state=state)
+            except tk.TclError:
+                pass
+
+    def _update_deglitch_ui(self, *args):
+        master_enabled = self.enable_deglitching.get()
+        auto_enabled, manual_enabled = self._deglitch_enable_flags()
+
+        self._set_widget_state(
+            self._deglitch_mode_widgets,
+            "readonly" if master_enabled else "disabled",
+        )
+        self._set_widget_state(
+            self._auto_deglitch_widgets,
+            "normal" if auto_enabled else "disabled",
+        )
+        self._set_widget_state(
+            self._manual_deglitch_widgets,
+            "normal" if manual_enabled else "disabled",
+        )
+        self._sync_deglitch_backend_vars()
+
     def pick_input(self):
         d = filedialog.askdirectory(title="Select folder containing .xasd files")
         if d:
@@ -389,6 +537,15 @@ class AstraGui(tk.Tk):
     def _float(self, name: str, var: tk.StringVar) -> float:
         try:
             return float(var.get())
+        except ValueError as exc:
+            raise ValueError(f"Invalid numeric value for {name}: {var.get()!r}") from exc
+
+    def _float_or_none(self, name: str, var: tk.StringVar) -> float | None:
+        value = var.get().strip()
+        if value == "":
+            return None
+        try:
+            return float(value)
         except ValueError as exc:
             raise ValueError(f"Invalid numeric value for {name}: {var.get()!r}") from exc
 
@@ -410,6 +567,13 @@ class AstraGui(tk.Tk):
         plot_min = self._float("plot min", self.plot_min)
         plot_max = self._float("plot max", self.plot_max)
         nnorm = self._int("normalization order", self.nnorm)
+        deglitch_threshold = self._float("deglitch threshold", self.deglitch_threshold)
+        deglitch_window = self._int("deglitch window", self.deglitch_window)
+        deglitch_min_energy = self._float_or_none("deglitch min energy", self.deglitch_min_energy)
+        deglitch_max_energy = self._float_or_none("deglitch max energy", self.deglitch_max_energy)
+        manual_deglitch_min_energy = self._float_or_none("manual deglitch min energy", self.manual_deglitch_min_energy)
+        manual_deglitch_max_energy = self._float_or_none("manual deglitch max energy", self.manual_deglitch_max_energy)
+        manual_deglitch_margin_points = self._int("manual deglitch margin points", self.manual_deglitch_margin_points)
 
         if align_min >= align_max:
             raise ValueError("align min must be smaller than align max.")
@@ -417,8 +581,20 @@ class AstraGui(tk.Tk):
             raise ValueError("shift min must be smaller than shift max.")
         if plot_min >= plot_max:
             raise ValueError("plot min must be smaller than plot max.")
+        if deglitch_min_energy is not None and deglitch_max_energy is not None and deglitch_min_energy >= deglitch_max_energy:
+            raise ValueError("deglitch min energy must be smaller than deglitch max energy.")
+        if manual_deglitch_min_energy is not None and manual_deglitch_max_energy is not None and manual_deglitch_min_energy >= manual_deglitch_max_energy:
+            raise ValueError("manual deglitch min energy must be smaller than manual deglitch max energy.")
         if nnorm < 0:
             raise ValueError("normalization order must be 0 or a positive integer.")
+        if deglitch_window < 1:
+            raise ValueError("deglitch window must be a positive integer.")
+        if manual_deglitch_margin_points < 1:
+            raise ValueError("manual deglitch margin points must be a positive integer.")
+
+        auto_deglitch_enabled, manual_deglitch_enabled = self._deglitch_enable_flags()
+        self.enable_auto_deglitch.set(auto_deglitch_enabled)
+        self.enable_manual_deglitch_range.set(manual_deglitch_enabled)
 
         return AstraConfig(
             analysis_mode=self.analysis_mode.get(),
@@ -436,6 +612,16 @@ class AstraGui(tk.Tk):
             shift_bound_min=shift_min,
             shift_bound_max=shift_max,
             fluo_multiplicative_constant=self._float("fluo factor", self.fluo_factor),
+            enable_auto_deglitch=auto_deglitch_enabled,
+            deglitch_method="interpolate",
+            deglitch_threshold=deglitch_threshold,
+            deglitch_window=deglitch_window,
+            deglitch_min_energy=deglitch_min_energy,
+            deglitch_max_energy=deglitch_max_energy,
+            enable_manual_deglitch_range=manual_deglitch_enabled,
+            manual_deglitch_min_energy=manual_deglitch_min_energy,
+            manual_deglitch_max_energy=manual_deglitch_max_energy,
+            manual_deglitch_margin_points=manual_deglitch_margin_points,
             save_detector_raw_overview_plot=self.plot_detector_raw_overview.get(),
             save_processed_overview_plot=self.plot_processed_overview.get(),
             save_bkgcorr_overview_plot=self.plot_bkgcorr_overview.get(),
@@ -466,6 +652,18 @@ class AstraGui(tk.Tk):
             "shift_bound_min": c.shift_bound_min,
             "shift_bound_max": c.shift_bound_max,
             "fluo_multiplicative_constant": c.fluo_multiplicative_constant,
+            "enable_deglitching": self.enable_deglitching.get(),
+            "deglitch_mode": self.deglitch_mode.get(),
+            "enable_auto_deglitch": c.enable_auto_deglitch,
+            "deglitch_method": "interpolate",
+            "deglitch_threshold": c.deglitch_threshold,
+            "deglitch_window": c.deglitch_window,
+            "deglitch_min_energy": c.deglitch_min_energy,
+            "deglitch_max_energy": c.deglitch_max_energy,
+            "enable_manual_deglitch_range": c.enable_manual_deglitch_range,
+            "manual_deglitch_min_energy": c.manual_deglitch_min_energy,
+            "manual_deglitch_max_energy": c.manual_deglitch_max_energy,
+            "manual_deglitch_margin_points": c.manual_deglitch_margin_points,
             "save_detector_raw_overview_plot": getattr(c, "save_detector_raw_overview_plot", False),
             "save_processed_overview_plot": getattr(c, "save_processed_overview_plot", True),
             "save_bkgcorr_overview_plot": getattr(c, "save_bkgcorr_overview_plot", False),
@@ -492,6 +690,17 @@ class AstraGui(tk.Tk):
             "shift_bound_min": self.shift_min,
             "shift_bound_max": self.shift_max,
             "fluo_multiplicative_constant": self.fluo_factor,
+            "enable_deglitching": self.enable_deglitching,
+            "deglitch_mode": self.deglitch_mode,
+            "enable_auto_deglitch": self.enable_auto_deglitch,
+            "deglitch_threshold": self.deglitch_threshold,
+            "deglitch_window": self.deglitch_window,
+            "deglitch_min_energy": self.deglitch_min_energy,
+            "deglitch_max_energy": self.deglitch_max_energy,
+            "enable_manual_deglitch_range": self.enable_manual_deglitch_range,
+            "manual_deglitch_min_energy": self.manual_deglitch_min_energy,
+            "manual_deglitch_max_energy": self.manual_deglitch_max_energy,
+            "manual_deglitch_margin_points": self.manual_deglitch_margin_points,
             "save_detector_raw_overview_plot": self.plot_detector_raw_overview,
             "save_processed_overview_plot": self.plot_processed_overview,
             "save_bkgcorr_overview_plot": self.plot_bkgcorr_overview,
@@ -506,9 +715,27 @@ class AstraGui(tk.Tk):
             if key in data:
                 if isinstance(var, tk.BooleanVar):
                     var.set(bool(data[key]))
+                elif data[key] is None:
+                    var.set("")
                 else:
                     var.set(str(data[key]))
 
+        if "enable_deglitching" not in data or "deglitch_mode" not in data:
+            auto_enabled = self.enable_auto_deglitch.get()
+            manual_enabled = self.enable_manual_deglitch_range.get()
+            self.enable_deglitching.set(auto_enabled or manual_enabled)
+            if auto_enabled and manual_enabled:
+                self.deglitch_mode.set("both")
+            elif manual_enabled:
+                self.deglitch_mode.set("manual")
+            else:
+                self.deglitch_mode.set("automatic")
+        elif self.deglitch_mode.get() not in {"automatic", "manual", "both"}:
+            self.deglitch_mode.set("automatic")
+
+        self.deglitch_method.set("interpolate")
+        self._sync_deglitch_backend_vars()
+        self._update_deglitch_ui()
         self._update_alignment_ui()
 
     def save_config(self):
