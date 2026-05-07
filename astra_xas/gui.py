@@ -40,6 +40,9 @@ class AstraGui(tk.Tk):
         self.align_max = tk.StringVar(value="7140.0")
         self.shift_min = tk.StringVar(value="-5.0")
         self.shift_max = tk.StringVar(value="5.0")
+        self.alignment_quality_warn_threshold = tk.StringVar(value="0.7")
+        self.alignment_grid_points = tk.StringVar(value="50")
+        self.save_drift_plot = tk.BooleanVar(value=False)
         self.fluo_factor = tk.StringVar(value="1e-11")
         self.enable_deglitching = tk.BooleanVar(value=False)
         self.deglitch_mode = tk.StringVar(value="automatic")
@@ -254,6 +257,7 @@ class AstraGui(tk.Tk):
             ("normalization order", self.nnorm, "", None),
             ("align min / eV", self.align_min, "align max / eV", self.align_max),
             ("shift min / eV", self.shift_min, "shift max / eV", self.shift_max),
+            ("Quality warn threshold (0–1)", self.alignment_quality_warn_threshold, "Grid points (coarse search)", self.alignment_grid_points),
             ("fluo factor", self.fluo_factor, "", None),
         ]
 
@@ -268,6 +272,12 @@ class AstraGui(tk.Tk):
                 ttk.Entry(frame, textvariable=var2, width=14).grid(
                     row=r, column=3, sticky="w", padx=6, pady=3
                 )
+
+        ttk.Checkbutton(
+            frame,
+            text="Save drift plot",
+            variable=self.save_drift_plot,
+        ).grid(row=len(rows), column=0, columnspan=4, sticky="w", pady=(5, 0))
 
     def _build_deglitch_section(self, parent):
         frame = ttk.LabelFrame(
@@ -574,6 +584,14 @@ class AstraGui(tk.Tk):
         manual_deglitch_min_energy = self._float_or_none("manual deglitch min energy", self.manual_deglitch_min_energy)
         manual_deglitch_max_energy = self._float_or_none("manual deglitch max energy", self.manual_deglitch_max_energy)
         manual_deglitch_margin_points = self._int("manual deglitch margin points", self.manual_deglitch_margin_points)
+        alignment_quality_warn_threshold = self._float(
+            "alignment quality warn threshold",
+            self.alignment_quality_warn_threshold,
+        )
+        alignment_grid_points = self._int(
+            "alignment grid points",
+            self.alignment_grid_points,
+        )
 
         if align_min >= align_max:
             raise ValueError("align min must be smaller than align max.")
@@ -591,6 +609,10 @@ class AstraGui(tk.Tk):
             raise ValueError("deglitch window must be a positive integer.")
         if manual_deglitch_margin_points < 1:
             raise ValueError("manual deglitch margin points must be a positive integer.")
+        if alignment_grid_points < 5:
+            raise ValueError("Alignment grid points must be at least 5.")
+        if not (0.0 <= alignment_quality_warn_threshold <= 1.0):
+            raise ValueError("Alignment quality warn threshold must be between 0.0 and 1.0.")
 
         auto_deglitch_enabled, manual_deglitch_enabled = self._deglitch_enable_flags()
         self.enable_auto_deglitch.set(auto_deglitch_enabled)
@@ -611,6 +633,8 @@ class AstraGui(tk.Tk):
             align_window_max=align_max,
             shift_bound_min=shift_min,
             shift_bound_max=shift_max,
+            alignment_quality_warn_threshold=alignment_quality_warn_threshold,
+            alignment_grid_points=alignment_grid_points,
             fluo_multiplicative_constant=self._float("fluo factor", self.fluo_factor),
             enable_auto_deglitch=auto_deglitch_enabled,
             deglitch_method="interpolate",
@@ -628,7 +652,7 @@ class AstraGui(tk.Tk):
             save_raw_overview_plot=False,
             save_norm_overview_plot=self.plot_norm_overview.get(),
             save_replicate_qc_plots=self.plot_replicate_qc.get(),
-            save_drift_plot=False,
+            save_drift_plot=self.save_drift_plot.get(),
             save_foil_alignment_plots=False,
             plot_energy_min=plot_min,
             plot_energy_max=plot_max,
@@ -651,6 +675,8 @@ class AstraGui(tk.Tk):
             "align_window_max": c.align_window_max,
             "shift_bound_min": c.shift_bound_min,
             "shift_bound_max": c.shift_bound_max,
+            "alignment_quality_warn_threshold": c.alignment_quality_warn_threshold,
+            "alignment_grid_points": c.alignment_grid_points,
             "fluo_multiplicative_constant": c.fluo_multiplicative_constant,
             "enable_deglitching": self.enable_deglitching.get(),
             "deglitch_mode": self.deglitch_mode.get(),
@@ -669,6 +695,7 @@ class AstraGui(tk.Tk):
             "save_bkgcorr_overview_plot": getattr(c, "save_bkgcorr_overview_plot", False),
             "save_norm_overview_plot": c.save_norm_overview_plot,
             "save_replicate_qc_plots": c.save_replicate_qc_plots,
+            "save_drift_plot": c.save_drift_plot,
             "plot_energy_min": c.plot_energy_min,
             "plot_energy_max": c.plot_energy_max,
         }
@@ -689,6 +716,8 @@ class AstraGui(tk.Tk):
             "align_window_max": self.align_max,
             "shift_bound_min": self.shift_min,
             "shift_bound_max": self.shift_max,
+            "alignment_quality_warn_threshold": self.alignment_quality_warn_threshold,
+            "alignment_grid_points": self.alignment_grid_points,
             "fluo_multiplicative_constant": self.fluo_factor,
             "enable_deglitching": self.enable_deglitching,
             "deglitch_mode": self.deglitch_mode,
@@ -707,6 +736,7 @@ class AstraGui(tk.Tk):
             "save_raw_overview_plot": self.plot_processed_overview,  # legacy config support
             "save_norm_overview_plot": self.plot_norm_overview,
             "save_replicate_qc_plots": self.plot_replicate_qc,
+            "save_drift_plot": self.save_drift_plot,
             "plot_energy_min": self.plot_min,
             "plot_energy_max": self.plot_max,
         }

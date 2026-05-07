@@ -12,7 +12,7 @@ from .signals import compute_signals, get_signal
 from .alignment import find_best_shift
 from .grouping import group_samples
 from .export import save_two_col
-from .plotting import plot_overview, plot_replicate_qc
+from .plotting import plot_overview, plot_replicate_qc, plot_drift
 
 
 AUTO_DEGLITCH_WARNING = (
@@ -408,6 +408,28 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
         raise RuntimeError("No .xasd files remain after applying manual exclusions.")
 
     alignment_source = getattr(config, "alignment_source", "separate_foil")
+    shift_records = []
+
+    def append_shift_record(filename: str, shift_value: float, quality_value: float):
+        shift_records.append({
+            "filename": filename,
+            "shift_eV": shift_value,
+            "alignment_quality": quality_value,
+            "scan_index": len(shift_records),
+        })
+
+    def warn_alignment_quality(filename: str, err: float, quality: float):
+        if not np.isfinite(err) and quality == 0.0:
+            warnings.append(
+                f"Alignment skipped (unusable reference or moving spectrum): "
+                f"{filename} — shift set to 0.0"
+            )
+        elif np.isfinite(err) and quality < config.alignment_quality_warn_threshold:
+            warnings.append(
+                f"Low alignment quality: {filename} "
+                f"quality={quality:.3f} "
+                f"(threshold={config.alignment_quality_warn_threshold})"
+            )
 
     if alignment_source == "separate_foil":
         foil_entries = [e for e in entries if e["is_foil"]]
@@ -419,35 +441,51 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
         first_foil = foil_entries[0]
         E_foil_ref = first_foil["energy"]
         foil_ref_signal = get_signal(first_foil, config.foil_alignment_mode)
-        foil_shift_map = {first_foil["filename"]: {"shift_eV": 0.0, "fit_error": 0.0}}
+        foil_shift_map = {
+            first_foil["filename"]: {
+                "shift_eV": 0.0,
+                "fit_error": 0.0,
+                "alignment_quality": 1.0,
+            }
+        }
         log(f"Reference foil: {first_foil['filename']} shift = 0.0000 eV")
 
         for foil in foil_entries[1:]:
-            shift, err = find_best_shift(
+            shift, err, quality = find_best_shift(
                 E_foil_ref,
                 foil_ref_signal,
                 foil["energy"],
                 get_signal(foil, config.foil_alignment_mode),
                 window=config.align_window,
                 bounds=config.shift_bounds,
+                grid_points=config.alignment_grid_points,
             )
-            foil_shift_map[foil["filename"]] = {"shift_eV": shift, "fit_error": err}
+            foil_shift_map[foil["filename"]] = {
+                "shift_eV": shift,
+                "fit_error": err,
+                "alignment_quality": quality,
+            }
+            warn_alignment_quality(foil["filename"], err, quality)
             if abs(shift) > config.warn_shift_abs_eV:
                 warnings.append(f"Large foil shift: {foil['filename']} = {shift:.4f} eV")
-            log(f"Foil {foil['filename']}: shift = {shift:.4f} eV, fit_error = {err:.6g}")
+            log(f"Foil {foil['filename']}: shift = {shift:.4f} eV, fit_error = {err:.6g}, quality = {quality:.3f}")
 
         current_shift = 0.0
+        current_quality = 1.0
         current_foil_name = first_foil["filename"]
         sample_before_first_foil = True
         for e in entries:
             if e["is_foil"]:
                 current_foil_name = e["filename"]
                 current_shift = foil_shift_map[current_foil_name]["shift_eV"]
+                current_quality = foil_shift_map[current_foil_name]["alignment_quality"]
                 sample_before_first_foil = False
             elif sample_before_first_foil:
                 warnings.append(f"Sample appears before first foil and will use first foil shift: {e['filename']}")
             e["assigned_foil"] = current_foil_name
             e["energy_shift_eV"] = current_shift
+            e["alignment_quality"] = current_quality
+            append_shift_record(e["filename"], current_shift, current_quality)
         sample_entries = [e for e in entries if not e["is_foil"]]
 
     elif alignment_source == "inline_ref":
@@ -458,28 +496,43 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
         E_ref = ref_scan["energy"]
         mu_ref_signal = ref_scan["mu_ref"]
         foil_entries = []
-        foil_shift_map = {ref_scan["filename"]: {"shift_eV": 0.0, "fit_error": 0.0}}
+        foil_shift_map = {
+            ref_scan["filename"]: {
+                "shift_eV": 0.0,
+                "fit_error": 0.0,
+                "alignment_quality": 1.0,
+            }
+        }
         ref_name = f"inline_ref:{ref_scan['filename']}"
         log(f"Inline reference scan: {ref_scan['filename']} shift = 0.0000 eV")
 
         for e in sample_entries:
             if e is ref_scan:
-                shift, err = 0.0, 0.0
+                shift, err, quality = 0.0, 0.0, 1.0
             else:
-                shift, err = find_best_shift(
+                shift, err, quality = find_best_shift(
                     E_ref,
                     mu_ref_signal,
                     e["energy"],
                     e["mu_ref"],
                     window=config.align_window,
                     bounds=config.shift_bounds,
+                    grid_points=config.alignment_grid_points,
                 )
             e["assigned_foil"] = ref_name
             e["energy_shift_eV"] = shift
-            foil_shift_map[e["filename"]] = {"shift_eV": shift, "fit_error": err}
+            e["alignment_quality"] = quality
+            foil_shift_map[e["filename"]] = {
+                "shift_eV": shift,
+                "fit_error": err,
+                "alignment_quality": quality,
+            }
+            append_shift_record(e["filename"], shift, quality)
+            if e is not ref_scan:
+                warn_alignment_quality(e["filename"], err, quality)
             if abs(shift) > config.warn_shift_abs_eV:
                 warnings.append(f"Large inline reference shift: {e['filename']} = {shift:.4f} eV")
-            log(f"Inline ref {e['filename']}: shift = {shift:.4f} eV, fit_error = {err:.6g}")
+            log(f"Inline ref {e['filename']}: shift = {shift:.4f} eV, fit_error = {err:.6g}, quality = {quality:.3f}")
     else:
         raise RuntimeError(f"Unknown alignment_source='{alignment_source}'. Use 'separate_foil' or 'inline_ref'.")
 
@@ -504,6 +557,19 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
             raise RuntimeError("No sample files remain after shift safety rejection.")
 
     groups = group_samples(sample_entries)
+    plot_files = []
+
+    if config.save_drift_plot:
+        plots_dir = output_dir / "plots"
+        plots_dir.mkdir(parents=True, exist_ok=True)
+        drift_path = plots_dir / "drift_tracker.png"
+        plot_drift(
+            shift_records,
+            drift_path,
+            warn_threshold_eV=config.warn_shift_abs_eV,
+            quality_threshold=config.alignment_quality_warn_threshold,
+        )
+        plot_files.append(drift_path)
 
     with open(output_dir / "ASTRA_excluded_scans.dat", "w", encoding="utf-8") as f:
         f.write("# filename\tbase_name\treplicate_id\treason\n")
@@ -526,15 +592,24 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
             f.write("# None\n")
 
     with open(output_dir / "ASTRA_energy_shifts.dat", "w", encoding="utf-8") as f:
-        f.write("# filename\tbase_name\treplicate_id\tassigned_foil\tenergy_shift_eV\n")
+        f.write("# filename\tbase_name\treplicate_id\tassigned_foil\tenergy_shift_eV\talignment_quality\n")
         for s in sample_entries:
             rep = "None" if s["replicate_id"] is None else str(s["replicate_id"])
-            f.write(f"{s['filename']}\t{s['base_name']}\t{rep}\t{s['assigned_foil']}\t{s['energy_shift_eV']:.6f}\n")
+            f.write(
+                f"{s['filename']}\t{s['base_name']}\t{rep}\t{s['assigned_foil']}\t"
+                f"{s['energy_shift_eV']:.6f}\t{s['alignment_quality']:.6f}\n"
+            )
 
     with open(output_dir / "ASTRA_foil_alignment.dat", "w", encoding="utf-8") as f:
-        f.write("# foil_filename\tshift_eV\tfit_error\n")
+        f.write("# foil_filename\tshift_eV\tfit_error\talignment_quality\n")
+        f.write("# alignment_quality: Pearson r between z-scored derivatives at best shift.\n")
+        f.write("#   Near 1.0 = reliable. Below 0.7 = suspect.\n")
+        f.write("#   not-finite fit_error with quality=0.0 means alignment was skipped.\n")
         for foil_name, info in foil_shift_map.items():
-            f.write(f"{foil_name}\t{info['shift_eV']:.6f}\t{info['fit_error']:.8g}\n")
+            f.write(
+                f"{foil_name}\t{info['shift_eV']:.6f}\t{info['fit_error']:.8g}\t"
+                f"{info['alignment_quality']:.6f}\n"
+            )
 
     group_summary_rows = []
     group_norm_metadata_rows = []
@@ -734,7 +809,6 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
                         replaced_str = " ".join(f"{e:.6f}" for e in rec["replaced_energies_manual"])
                         f.write(f"{rec['filename']}\tmanual_range_interpolate\t{rec['n_replaced_manual']}\t{replaced_str}\n")
 
-    plot_files = []
     if plots_enabled:
         log(f"Generating plots in: {plots_dir}")
 
@@ -777,6 +851,13 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
         for row in group_norm_metadata_rows:
             f.write("\t".join(row) + "\n")
 
+    low_quality_count = sum(
+        1
+        for info in foil_shift_map.values()
+        if not (info["fit_error"] == 0.0 and info["alignment_quality"] == 1.0)
+        and info["alignment_quality"] < config.alignment_quality_warn_threshold
+    )
+
     with open(output_dir / "ASTRA_processing_report.txt", "w", encoding="utf-8") as f:
         f.write(f"{config.version}\n")
         f.write(f"Input directory: {input_dir}\nOutput directory: {output_dir}\n")
@@ -786,6 +867,10 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
         f.write(f"Replicate outliers skipped: {len(auto_outlier_entries)}\n")
         f.write(f"Foils found: {len(foil_entries)}\n")
         f.write(f"Groups processed: {len(group_summary_rows)}\n")
+        f.write(
+            f"Low-quality alignments (quality < {config.alignment_quality_warn_threshold}): "
+            f"{low_quality_count}\n"
+        )
         f.write(f"Auto-deglitched points: {total_auto_deglitched_points}\n")
         f.write(f"Manually range-interpolated points: {total_manual_range_interpolated_points}\n")
         f.write(f"Deglitch note: {AUTO_DEGLITCH_WARNING}\n")

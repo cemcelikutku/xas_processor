@@ -105,3 +105,53 @@ def plot_replicate_qc(
     fig.savefig(output_path, dpi=200)
     plt.close(fig)
     return output_path
+
+
+def plot_drift(
+    shift_records: list[dict],
+    output_path: str | Path,
+    warn_threshold_eV: float = 2.0,
+    quality_threshold: float = 0.7,
+) -> None:
+    plt = _setup_matplotlib()
+    fig, ax = plt.subplots(figsize=(10, 4))
+
+    reliable = [rec for rec in shift_records if rec["alignment_quality"] >= quality_threshold]
+    uncertain = [rec for rec in shift_records if rec["alignment_quality"] < quality_threshold]
+    labelled = False
+
+    if reliable:
+        ax.scatter(
+            [rec["scan_index"] for rec in reliable],
+            [rec["shift_eV"] for rec in reliable],
+            marker="o",
+            color="steelblue",
+            zorder=3,
+            label=f"reliable (quality ≥ {quality_threshold:.2f})",
+        )
+        labelled = True
+    if uncertain:
+        ax.scatter(
+            [rec["scan_index"] for rec in uncertain],
+            [rec["shift_eV"] for rec in uncertain],
+            marker="o",
+            facecolors="none",
+            edgecolors="tomato",
+            zorder=3,
+            label=f"uncertain (quality < {quality_threshold:.2f})",
+        )
+        labelled = True
+
+    ax.axhline(0, color="grey", linewidth=0.8, linestyle="-")
+    ax.axhline(warn_threshold_eV, color="red", linestyle="--", linewidth=0.8, alpha=0.6)
+    ax.axhline(-warn_threshold_eV, color="red", linestyle="--", linewidth=0.8, alpha=0.6)
+    ax.set_title("Energy shift per scan — drift tracker")
+    ax.set_xlabel("Scan index")
+    ax.set_ylabel("Energy shift (eV)")
+    if labelled:
+        ax.legend()
+    fig.tight_layout()
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=150)
+    plt.close(fig)

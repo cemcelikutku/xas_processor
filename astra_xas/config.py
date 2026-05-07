@@ -36,6 +36,8 @@ class AstraConfig:
     align_window_max: float = 7140.0
     shift_bound_min: float = -5.0
     shift_bound_max: float = 5.0
+    alignment_quality_warn_threshold: float = 0.7
+    alignment_grid_points: int = 50
     interp_kind: str = "linear"
     warn_shift_abs_eV: float = 2.0
 
