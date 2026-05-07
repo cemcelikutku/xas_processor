@@ -18,7 +18,7 @@ AstraXAS provides automated workflows for X-ray absorption spectroscopy (XAS) pr
 - **Automatic outlier detection** — optionally flag and exclude replicates that deviate from the group mean by a configurable RMS threshold
 - **Shift rejection** — optionally exclude replicates whose energy shift exceeds a threshold before merging
 - **Detector raw export** — saves all raw detector channels (I0, I1, I2, IF, FDT, Ir) alongside processed outputs, plottable directly in the Spectrum Viewer
-- **Automatic plots** — overview plots for processed μ(E), background-corrected, and normalized spectra; per-group replicate QC plots; optional energy drift tracker
+- **Automatic plots** — detector health overview, processed μ(E), background-corrected, and normalized overview plots; per-group replicate QC plots; optional energy drift tracker
 - **Interactive Spectrum Viewer** — compare any `.dat` files side by side with Savitzky-Golay smoothing, raw/smoothed overlay, legend toggling, click-to-read energy values, and publication-ready figure export
 - **JSON config system** — save and load processing parameters per edge or experiment type
 - **CLI and Python API** — run headless from the command line or call `process_folder()` from a script
@@ -155,6 +155,21 @@ Set `save_drift_plot=True` to write `plots/drift_tracker.png`. Reliable scans ar
 
 ---
 
+## Detector health overview
+
+When `save_detector_health_overview_plot=True`, AstraXAS writes `plots/detector_health_overview.png`. This is a stacked diagnostic PNG that plots individual sample scan traces before normalization, so beam drops, detector jumps, spikes, or unstable channels are easier to spot than in averaged spectra.
+
+The channel set is mode-aware:
+
+- Fluorescence mode: `I0`, `IF`, and `FDT` when available.
+- Transmission mode: `I0` and `I1`.
+- Reference mode: `I1`, `I2`, and `ln(I1/I2)`.
+- If reference-channel data are available in fluorescence or transmission mode, `ln(I1/I2)` is added as an extra panel.
+
+Missing or non-plottable channels are skipped gracefully. `ASTRA_processing_report.txt` records whether the detector health overview was created and lists included and skipped channels.
+
+---
+
 ## Deglitching
 
 AstraXAS includes optional deglitching for scan-level artifacts. Deglitching operates on each aligned replicate before replicate averaging. The merge-then-normalize workflow is preserved: corrected μ(E) replicates are merged first, and Larch `pre_edge` normalization is applied once to the merged spectrum.
@@ -234,6 +249,7 @@ For each sample group, AstraXAS writes the following to the output directory:
 | `<sample>_flat.dat` | Flattened normalized μ(E) |
 | `detector_raw/<scan>.dat` | Raw detector channels for every individual scan |
 | `plots/replicate_qc/<sample>_replicate_qc.png` | Replicate overlay QC plot |
+| `plots/detector_health_overview.png` | Mode-aware stacked detector QC plot using individual sample scan traces |
 | `plots/aligned_averaged_IF_overview.png` | Optional aligned/interpolated/averaged IF detector signal by group |
 | `plots/processed_mu_overview.png` | All merged processed μ(E) spectra overlaid |
 | `plots/background_corrected_overview.png` | All background-corrected spectra overlaid |
@@ -297,6 +313,7 @@ All processing parameters are exposed in the GUI and saveable as JSON config fil
 | `outlier_rms_threshold` | RMS deviation threshold for outlier detection |
 | `enable_shift_rejection` | Exclude replicates with large energy shifts |
 | `reject_shift_abs_eV` | Shift threshold for rejection (eV) |
+| `save_detector_health_overview_plot` | Save `plots/detector_health_overview.png`; default `True` |
 | `save_detector_raw_overview_plot` | Save the aligned averaged IF overview plot; legacy config name retained for compatibility |
 | `save_processed_overview_plot` | Save an overview plot of merged processed μ(E) spectra |
 | `save_bkgcorr_overview_plot` | Save an overview plot of background-corrected spectra |

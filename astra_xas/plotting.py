@@ -155,3 +155,77 @@ def plot_drift(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=150)
     plt.close(fig)
+
+
+def plot_detector_health_overview(
+    records: list[dict],
+    output_path: str | Path,
+    channels: list[tuple[str, str]],
+    title: str = "Detector health overview",
+    energy_range: tuple[float, float] | None = None,
+) -> dict:
+    """Save a stacked detector-channel QC plot using individual scan traces."""
+    output_path = Path(output_path)
+    included_channels = []
+    skipped_channels = []
+    channel_data = []
+
+    for key, label in channels:
+        traces = []
+        for rec in records:
+            values = rec.get(key)
+            if values is None:
+                continue
+            x, y = _finite_xy(rec["energy"], values)
+            if energy_range is not None:
+                lo, hi = energy_range
+                mask = (x >= lo) & (x <= hi)
+                x, y = x[mask], y[mask]
+            if len(x) == 0:
+                continue
+            traces.append((x, y, rec.get("label", rec.get("filename", "scan"))))
+        if traces:
+            included_channels.append(label)
+            channel_data.append((label, traces))
+        else:
+            skipped_channels.append(label)
+
+    if not channel_data:
+        return {"path": None, "channels": included_channels, "skipped": skipped_channels}
+
+    plt = _setup_matplotlib()
+    n_panels = len(channel_data)
+    fig, axes = plt.subplots(
+        n_panels,
+        1,
+        figsize=(10, max(2.2 * n_panels, 4)),
+        sharex=True,
+        squeeze=False,
+    )
+    axes = axes[:, 0]
+
+    legend_count = max(len(traces) for _, traces in channel_data)
+    for ax, (label, traces) in zip(axes, channel_data):
+        for x, y, trace_label in traces:
+            ax.plot(
+                x,
+                y,
+                linewidth=0.75,
+                alpha=0.55,
+                label=trace_label if legend_count <= 12 else None,
+            )
+        ax.set_ylabel(label)
+        ax.grid(True, alpha=0.25)
+        if legend_count <= 12:
+            ax.legend(fontsize=6, loc="best")
+
+    axes[-1].set_xlabel("Energy / eV")
+    subtitle = "individual scan traces"
+    if skipped_channels:
+        subtitle += "; skipped: " + ", ".join(skipped_channels)
+    fig.suptitle(f"{title} ({subtitle})")
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=150)
+    plt.close(fig)
+    return {"path": output_path, "channels": included_channels, "skipped": skipped_channels}

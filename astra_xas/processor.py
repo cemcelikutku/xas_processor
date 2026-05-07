@@ -12,7 +12,7 @@ from .signals import compute_signals, get_signal
 from .alignment import find_best_shift
 from .grouping import group_samples
 from .export import save_two_col
-from .plotting import plot_overview, plot_replicate_qc, plot_drift
+from .plotting import plot_overview, plot_replicate_qc, plot_drift, plot_detector_health_overview
 
 
 AUTO_DEGLITCH_WARNING = (
@@ -55,6 +55,31 @@ def _as_clean_list(value):
     except TypeError:
         item = str(value).strip()
         return [item] if item else []
+
+
+def _records_have_channel(records: list[dict], key: str) -> bool:
+    for rec in records:
+        values = rec.get(key)
+        if values is None:
+            continue
+        values = np.asarray(values, dtype=float)
+        if np.isfinite(values).any():
+            return True
+    return False
+
+
+def _detector_health_channels(config: AstraConfig, records: list[dict]) -> list[tuple[str, str]]:
+    mode = getattr(config, "analysis_mode", "fluo")
+    if mode == "trans":
+        channels = [("I0", "I0"), ("I1", "I1")]
+    elif mode == "ref":
+        channels = [("I1", "I1"), ("I2", "I2"), ("mu_ref", "ln(I1/I2)")]
+    else:
+        channels = [("I0", "I0"), ("IF", "IF"), ("FDT", "FDT")]
+
+    if mode != "ref" and _records_have_channel(records, "mu_ref"):
+        channels.append(("mu_ref", "ln(I1/I2)"))
+    return channels
 
 
 def _safe_attr(group: Group, name: str, default=None):
@@ -327,7 +352,8 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
     plots_dir = output_dir / "plots"
     replicate_qc_dir = plots_dir / "replicate_qc"
     plots_enabled = (
-        getattr(config, "save_detector_raw_overview_plot", False)
+        getattr(config, "save_detector_health_overview_plot", True)
+        or getattr(config, "save_detector_raw_overview_plot", False)
         or getattr(config, "save_processed_overview_plot", getattr(config, "save_raw_overview_plot", True))
         or getattr(config, "save_bkgcorr_overview_plot", False)
         or getattr(config, "save_norm_overview_plot", True)
@@ -558,6 +584,33 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
 
     groups = group_samples(sample_entries)
     plot_files = []
+    plot_energy_range = (config.plot_energy_min, config.plot_energy_max)
+    detector_health_plot_info = {"path": None, "channels": [], "skipped": []}
+
+    if getattr(config, "save_detector_health_overview_plot", True):
+        detector_health_records = [
+            {
+                "energy": s["energy"],
+                "I0": s.get("I0"),
+                "I1": s.get("I1"),
+                "I2": s.get("I2"),
+                "IF": s.get("IF"),
+                "FDT": s.get("FDT"),
+                "mu_ref": s.get("mu_ref"),
+                "label": s["filename"],
+            }
+            for s in sample_entries
+        ]
+        detector_health_plot_info = plot_detector_health_overview(
+            detector_health_records,
+            plots_dir / "detector_health_overview.png",
+            _detector_health_channels(config, detector_health_records),
+            title="Detector health overview",
+            energy_range=plot_energy_range,
+        )
+        if detector_health_plot_info["path"] is not None:
+            plot_files.append(detector_health_plot_info["path"])
+            log(f"Saved plot: {detector_health_plot_info['path']}")
 
     if config.save_drift_plot:
         plots_dir = output_dir / "plots"
@@ -617,7 +670,6 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
     processed_plot_records = []
     bkgcorr_plot_records = []
     norm_plot_records = []
-    plot_energy_range = (config.plot_energy_min, config.plot_energy_max)
     total_auto_deglitched_points = 0
     total_manual_range_interpolated_points = 0
 
@@ -885,6 +937,16 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
         f.write(f"Plots folder: {plots_dir}\n")
         f.write(f"Detector raw folder: {output_dir / 'detector_raw'}\n")
         f.write(f"Detector raw files created: {len(detector_raw_files)}\n")
+        if getattr(config, "save_detector_health_overview_plot", True):
+            if detector_health_plot_info["path"] is not None:
+                channels = ", ".join(detector_health_plot_info["channels"])
+                skipped = ", ".join(detector_health_plot_info["skipped"]) or "None"
+                f.write(f"Detector health overview: created (channels: {channels}; skipped: {skipped})\n")
+            else:
+                skipped = ", ".join(detector_health_plot_info["skipped"]) or "None"
+                f.write(f"Detector health overview: not created (no plottable channels; skipped: {skipped})\n")
+        else:
+            f.write("Detector health overview: disabled\n")
         if getattr(config, "save_detector_raw_overview_plot", False):
             f.write("Aligned averaged IF overview: plots/aligned_averaged_IF_overview.png\n")
         else:
