@@ -18,7 +18,7 @@ AstraXAS provides automated workflows for X-ray absorption spectroscopy (XAS) pr
 - **Automatic outlier detection** — optionally flag and exclude replicates that deviate from the group mean by a configurable RMS threshold
 - **Shift rejection** — optionally exclude replicates whose energy shift exceeds a threshold before merging
 - **Detector raw export** — saves all raw detector channels (I0, I1, I2, IF, FDT, Ir) alongside processed outputs, plottable directly in the Spectrum Viewer
-- **Automatic plots** — detector health overview, analysis signal QC, processed μ(E), background-corrected, and normalized overview plots; per-group replicate QC plots; optional energy drift tracker
+- **Automatic plots** — detector health overview, analysis signal QC, processed μ(E), background-corrected, and normalized overview plots; pre-normalization and normalized replicate QC plots; optional energy drift tracker
 - **Interactive Spectrum Viewer** — compare any `.dat` files side by side with Savitzky-Golay smoothing, raw/smoothed overlay, legend toggling, click-to-read energy values, and publication-ready figure export
 - **JSON config system** — save and load processing parameters per edge or experiment type
 - **CLI and Python API** — run headless from the command line or call `process_folder()` from a script
@@ -126,7 +126,8 @@ print(result["output_dir"])
          ├─ <sample>_norm.dat        (normalized μ(E))
          ├─ <sample>_flat.dat        (flattened normalized μ(E))
          ├─ detector_raw/<scan>.dat  (all detector channels)
-         ├─ plots/                   (overview and QC plots)
+         ├─ plots/overview/          (dataset-level overview and QC plots)
+         ├─ plots/replicate_qc/      (scan-to-scan replicate QC plots)
          ├─ ASTRA_energy_shifts.dat
          ├─ ASTRA_foil_alignment.dat
          └─ ASTRA_processing_report.txt
@@ -151,13 +152,13 @@ Each computed alignment writes:
 
 If alignment cannot be evaluated because the reference or moving spectrum is unusable, AstraXAS sets `shift_eV = 0.0`, `fit_error = NaN`, and `alignment_quality = 0.0`, then records an explicit warning.
 
-Set `save_drift_plot=True` to write `plots/drift_tracker.png`. Reliable scans are shown as filled blue circles, while low-quality scans are shown as open red circles. Red dashed horizontal lines mark `±warn_shift_abs_eV`.
+Set `save_drift_plot=True` to write `plots/overview/drift_tracker.png`. Reliable scans are shown as filled blue circles, while low-quality scans are shown as open red circles. Red dashed horizontal lines mark `±warn_shift_abs_eV`.
 
 ---
 
 ## Detector health overview
 
-When `save_detector_health_overview_plot=True`, AstraXAS writes `plots/detector_health_overview.png`. This is a stacked diagnostic PNG that plots individual sample scan traces before normalization, so beam drops, detector jumps, spikes, or unstable channels are easier to spot than in averaged spectra.
+When `save_detector_health_overview_plot=True`, AstraXAS writes `plots/overview/detector_health_overview.png`. This is a stacked diagnostic PNG that plots individual sample scan traces before normalization, so beam drops, detector jumps, spikes, or unstable channels are easier to spot than in averaged spectra.
 
 The channel set is mode-aware:
 
@@ -172,7 +173,7 @@ Missing or non-plottable channels are skipped gracefully. `ASTRA_processing_repo
 
 ## Analysis signal QC
 
-When `save_analysis_signal_qc_plot=True`, AstraXAS writes `plots/analysis_signal_qc.png`. This plot shows the actual per-scan analysis signal before final normalization, with individual scan traces kept visible and a black diagnostic average trace added when multiple traces can be overlaid.
+When `save_analysis_signal_qc_plot=True`, AstraXAS writes `plots/overview/analysis_signal_qc.png`. This plot shows the actual per-scan analysis signal before final normalization, with individual scan traces kept visible and a black diagnostic average trace added when multiple traces can be overlaid.
 
 The plotted signal follows `analysis_mode`:
 
@@ -181,6 +182,20 @@ The plotted signal follows `analysis_mode`:
 - Reference mode: `ln(I1/I2)`
 
 This plot is intended to answer whether detector-channel artifacts cancel out or survive in the signal that is actually processed. Missing or non-finite traces are skipped gracefully, and `ASTRA_processing_report.txt` records the plotted signal, number of individual traces, whether an average trace was added, and any skipped traces.
+
+---
+
+## Processed μ(E) replicate QC
+
+When `save_processed_mu_replicate_qc_plot=True`, AstraXAS writes one pre-normalization replicate QC plot per sample group:
+
+```text
+plots/replicate_qc/<sample>_processed_mu_replicate_qc.png
+```
+
+This plot uses the aligned and interpolated processed μ(E) replicate spectra on the common group grid, after optional deglitching and outlier filtering, but before final Larch pre-edge normalization or flattening. Individual scans are shown with a thicker average trace so scan-to-scan consistency can be checked before normalization has a chance to hide differences.
+
+This is different from `plots/overview/processed_mu_overview.png`: the overview shows only averaged group spectra, while processed μ(E) replicate QC shows individual scans plus the group average for each sample.
 
 ---
 
@@ -262,14 +277,15 @@ For each sample group, AstraXAS writes the following to the output directory:
 | `<sample>_norm.dat` | Normalized μ(E) |
 | `<sample>_flat.dat` | Flattened normalized μ(E) |
 | `detector_raw/<scan>.dat` | Raw detector channels for every individual scan |
-| `plots/replicate_qc/<sample>_replicate_qc.png` | Replicate overlay QC plot |
-| `plots/detector_health_overview.png` | Mode-aware stacked detector QC plot using individual sample scan traces |
-| `plots/analysis_signal_qc.png` | Mode-aware per-scan analysis signal before final normalization, with optional average overlay |
-| `plots/aligned_averaged_IF_overview.png` | Optional aligned/interpolated/averaged IF detector signal by group |
-| `plots/processed_mu_overview.png` | All merged processed μ(E) spectra overlaid |
-| `plots/background_corrected_overview.png` | All background-corrected spectra overlaid |
-| `plots/normalized_overview.png` | All normalized spectra overlaid |
-| `plots/drift_tracker.png` | Optional scan-by-scan energy shift plot, written when `save_drift_plot=True` |
+| `plots/replicate_qc/<sample>_normalized_replicate_qc.png` | Normalized replicate overlay QC plot |
+| `plots/replicate_qc/<sample>_processed_mu_replicate_qc.png` | Pre-normalization processed μ(E) replicate QC plot |
+| `plots/overview/detector_health_overview.png` | Mode-aware stacked detector QC plot using individual sample scan traces |
+| `plots/overview/analysis_signal_qc.png` | Mode-aware per-scan analysis signal before final normalization, with optional average overlay |
+| `plots/overview/aligned_averaged_IF_overview.png` | Optional aligned/interpolated/averaged IF detector signal by group |
+| `plots/overview/processed_mu_overview.png` | All merged processed μ(E) spectra overlaid |
+| `plots/overview/background_corrected_overview.png` | All background-corrected spectra overlaid |
+| `plots/overview/normalized_overview.png` | All normalized spectra overlaid |
+| `plots/overview/drift_tracker.png` | Optional scan-by-scan energy shift plot, written when `save_drift_plot=True` |
 | `<sample>_deglitch_log.dat` | Deglitch point log, written only when deglitching modifies points |
 | `ASTRA_processing_report.txt` | Full parameter log, per-group summary, low-quality alignment count, warnings, and deglitch point counts |
 | `ASTRA_energy_shifts.dat` | Per-sample shift table: filename, base name, replicate id, assigned foil/reference, shift, alignment quality |
@@ -279,7 +295,7 @@ For each sample group, AstraXAS writes the following to the output directory:
 
 All `.dat` files have a commented header listing parameters and column names, and spectral `.dat` files are directly loadable in the Spectrum Viewer.
 
-Note: `plots/detector_raw_overview.png` was the former name for the aligned averaged IF overview. Current runs write only `plots/aligned_averaged_IF_overview.png`.
+Note: `plots/detector_raw_overview.png` was the former name for the aligned averaged IF overview. Current runs write only `plots/overview/aligned_averaged_IF_overview.png`. The normalized replicate QC plot was formerly named `<sample>_replicate_qc.png`; current runs write `<sample>_normalized_replicate_qc.png`.
 
 ---
 
@@ -328,14 +344,15 @@ All processing parameters are exposed in the GUI and saveable as JSON config fil
 | `outlier_rms_threshold` | RMS deviation threshold for outlier detection |
 | `enable_shift_rejection` | Exclude replicates with large energy shifts |
 | `reject_shift_abs_eV` | Shift threshold for rejection (eV) |
-| `save_detector_health_overview_plot` | Save `plots/detector_health_overview.png`; default `True` |
-| `save_analysis_signal_qc_plot` | Save `plots/analysis_signal_qc.png`; default `True` |
-| `save_detector_raw_overview_plot` | Save the aligned averaged IF overview plot; legacy config name retained for compatibility |
-| `save_processed_overview_plot` | Save an overview plot of merged processed μ(E) spectra |
-| `save_bkgcorr_overview_plot` | Save an overview plot of background-corrected spectra |
-| `save_norm_overview_plot` | Save an overview plot of normalized spectra |
+| `save_detector_health_overview_plot` | Save `plots/overview/detector_health_overview.png`; default `True` |
+| `save_analysis_signal_qc_plot` | Save `plots/overview/analysis_signal_qc.png`; default `True` |
+| `save_detector_raw_overview_plot` | Save `plots/overview/aligned_averaged_IF_overview.png`; legacy config name retained for compatibility |
+| `save_processed_overview_plot` | Save `plots/overview/processed_mu_overview.png` |
+| `save_bkgcorr_overview_plot` | Save `plots/overview/background_corrected_overview.png` |
+| `save_norm_overview_plot` | Save `plots/overview/normalized_overview.png` |
+| `save_processed_mu_replicate_qc_plot` | Save pre-normalization processed μ(E) replicate QC plots; default `True` |
 | `save_replicate_qc_plots` | Save per-group replicate QC plots |
-| `save_drift_plot` | Save `plots/drift_tracker.png` |
+| `save_drift_plot` | Save `plots/overview/drift_tracker.png` |
 | `plot_energy_min/max` | Energy range used for automatic overview and QC plots |
 
 In the GUI, the **Enable deglitching** checkbox and `automatic` / `manual` / `both` mode selector are translated into `enable_auto_deglitch` and `enable_manual_deglitch_range` in the saved configuration.

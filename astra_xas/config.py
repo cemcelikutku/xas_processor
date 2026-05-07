@@ -55,6 +55,7 @@ class AstraConfig:
     save_processed_overview_plot: bool = True
     save_bkgcorr_overview_plot: bool = False
     save_norm_overview_plot: bool = True
+    save_processed_mu_replicate_qc_plot: bool = True
     save_replicate_qc_plots: bool = True
     save_raw_overview_plot: bool = False  # legacy alias only; do not use in new GUI
     save_drift_plot: bool = False

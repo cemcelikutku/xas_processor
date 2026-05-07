@@ -64,6 +64,7 @@ class AstraGui(tk.Tk):
         self.plot_processed_overview = tk.BooleanVar(value=True)
         self.plot_bkgcorr_overview = tk.BooleanVar(value=False)
         self.plot_norm_overview = tk.BooleanVar(value=True)
+        self.plot_processed_mu_replicate_qc = tk.BooleanVar(value=True)
         self.plot_replicate_qc = tk.BooleanVar(value=True)
         # Backward-compatible internal alias. Do not expose as "raw" in the GUI.
         self.plot_raw_overview = self.plot_processed_overview
@@ -414,12 +415,18 @@ class AstraGui(tk.Tk):
 
         ttk.Checkbutton(
             frame,
-            text="Replicate QC plots",
-            variable=self.plot_replicate_qc,
+            text="Processed μ(E) replicate QC",
+            variable=self.plot_processed_mu_replicate_qc,
         ).grid(row=6, column=0, columnspan=2, sticky="w", pady=2)
 
+        ttk.Checkbutton(
+            frame,
+            text="Replicate QC plots",
+            variable=self.plot_replicate_qc,
+        ).grid(row=7, column=0, columnspan=2, sticky="w", pady=2)
+
         range_frame = ttk.Frame(frame)
-        range_frame.grid(row=7, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        range_frame.grid(row=8, column=0, columnspan=2, sticky="w", pady=(6, 0))
 
         ttk.Label(range_frame, text="Plot energy range / eV").grid(row=0, column=0, sticky="w")
         ttk.Entry(range_frame, textvariable=self.plot_min, width=10).grid(row=0, column=1, padx=(8, 4))
@@ -493,7 +500,7 @@ class AstraGui(tk.Tk):
                 "1) Select the folder containing ASTRA .xasd files.  "
                 "2) Keep sample signal as fluo for fluorescence XAS.  "
                 "3) Choose inline_ref if I1/I2 is measured in each scan, or separate_foil for separate foil files.  "
-                "4) Run and check ASTRA_processing_report.txt and the plots folder."
+                "4) Run and check ASTRA_processing_report.txt, plots/overview, and plots/replicate_qc."
             ),
             wraplength=520,
             justify="left",
@@ -667,6 +674,7 @@ class AstraGui(tk.Tk):
             save_bkgcorr_overview_plot=self.plot_bkgcorr_overview.get(),
             save_raw_overview_plot=False,
             save_norm_overview_plot=self.plot_norm_overview.get(),
+            save_processed_mu_replicate_qc_plot=self.plot_processed_mu_replicate_qc.get(),
             save_replicate_qc_plots=self.plot_replicate_qc.get(),
             save_drift_plot=self.save_drift_plot.get(),
             save_foil_alignment_plots=False,
@@ -712,6 +720,7 @@ class AstraGui(tk.Tk):
             "save_processed_overview_plot": getattr(c, "save_processed_overview_plot", True),
             "save_bkgcorr_overview_plot": getattr(c, "save_bkgcorr_overview_plot", False),
             "save_norm_overview_plot": c.save_norm_overview_plot,
+            "save_processed_mu_replicate_qc_plot": getattr(c, "save_processed_mu_replicate_qc_plot", True),
             "save_replicate_qc_plots": c.save_replicate_qc_plots,
             "save_drift_plot": c.save_drift_plot,
             "plot_energy_min": c.plot_energy_min,
@@ -755,6 +764,7 @@ class AstraGui(tk.Tk):
             "save_bkgcorr_overview_plot": self.plot_bkgcorr_overview,
             "save_raw_overview_plot": self.plot_processed_overview,  # legacy config support
             "save_norm_overview_plot": self.plot_norm_overview,
+            "save_processed_mu_replicate_qc_plot": self.plot_processed_mu_replicate_qc,
             "save_replicate_qc_plots": self.plot_replicate_qc,
             "save_drift_plot": self.save_drift_plot,
             "plot_energy_min": self.plot_min,

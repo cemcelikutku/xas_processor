@@ -62,6 +62,7 @@ def plot_replicate_qc(
     output_path: str | Path,
     energy_range: tuple[float, float] | None = None,
     y_label: str = "Normalized intensity",
+    title: str | None = None,
 ):
     """Save a QC plot showing individual replicate spectra and their average."""
     if not replicate_records:
@@ -93,7 +94,7 @@ def plot_replicate_qc(
         plt.close(fig)
         return None
 
-    ax.set_title(f"Replicate QC: {group_name}")
+    ax.set_title(title or f"Replicate QC: {group_name}")
     ax.set_xlabel("Energy / eV")
     ax.set_ylabel(y_label)
     if len(replicate_records) <= 12:

@@ -359,6 +359,7 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
     output_dir.mkdir(parents=True, exist_ok=True)
 
     plots_dir = output_dir / "plots"
+    overview_dir = plots_dir / "overview"
     replicate_qc_dir = plots_dir / "replicate_qc"
     plots_enabled = (
         getattr(config, "save_detector_health_overview_plot", True)
@@ -367,11 +368,16 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
         or getattr(config, "save_processed_overview_plot", getattr(config, "save_raw_overview_plot", True))
         or getattr(config, "save_bkgcorr_overview_plot", False)
         or getattr(config, "save_norm_overview_plot", True)
+        or getattr(config, "save_processed_mu_replicate_qc_plot", True)
         or getattr(config, "save_replicate_qc_plots", True)
     )
     if plots_enabled:
         plots_dir.mkdir(parents=True, exist_ok=True)
-        if getattr(config, "save_replicate_qc_plots", True):
+        overview_dir.mkdir(parents=True, exist_ok=True)
+        if (
+            getattr(config, "save_processed_mu_replicate_qc_plot", True)
+            or getattr(config, "save_replicate_qc_plots", True)
+        ):
             replicate_qc_dir.mkdir(parents=True, exist_ok=True)
 
     warnings: list[str] = []
@@ -614,7 +620,7 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
         ]
         detector_health_plot_info = plot_detector_health_overview(
             detector_health_records,
-            plots_dir / "detector_health_overview.png",
+            overview_dir / "detector_health_overview.png",
             _detector_health_channels(config, detector_health_records),
             title="Detector health overview",
             energy_range=plot_energy_range,
@@ -635,7 +641,7 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
         ]
         analysis_signal_qc_info = plot_analysis_signal_qc(
             analysis_signal_records,
-            plots_dir / "analysis_signal_qc.png",
+            overview_dir / "analysis_signal_qc.png",
             signal_label,
             energy_range=plot_energy_range,
         )
@@ -644,9 +650,8 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
             log(f"Saved plot: {analysis_signal_qc_info['path']}")
 
     if config.save_drift_plot:
-        plots_dir = output_dir / "plots"
-        plots_dir.mkdir(parents=True, exist_ok=True)
-        drift_path = plots_dir / "drift_tracker.png"
+        overview_dir.mkdir(parents=True, exist_ok=True)
+        drift_path = overview_dir / "drift_tracker.png"
         plot_drift(
             shift_records,
             drift_path,
@@ -703,6 +708,8 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
     norm_plot_records = []
     total_auto_deglitched_points = 0
     total_manual_range_interpolated_points = 0
+    processed_mu_replicate_qc_created = 0
+    processed_mu_replicate_qc_skipped: list[str] = []
 
     for (base_name, assigned_foil), scans in groups.items():
         log(f"Processing group: {base_name} ({len(scans)} scan(s))")
@@ -807,6 +814,36 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
 
         output_base = sanitize_name(base_name)
 
+        if getattr(config, "save_processed_mu_replicate_qc_plot", True):
+            if len(processed_array) > 1:
+                try:
+                    processed_replicate_records = [
+                        {"energy": master_energy, "mu": processed_array[i], "label": source_filenames[i]}
+                        for i in range(len(source_filenames))
+                    ]
+                    path = plot_replicate_qc(
+                        group_name=output_base,
+                        replicate_records=processed_replicate_records,
+                        average_record={"energy": master_energy, "mu": processed_avg, "label": "average"},
+                        output_path=replicate_qc_dir / f"{output_base}_processed_mu_replicate_qc.png",
+                        energy_range=plot_energy_range,
+                        y_label="Processed μ(E) before normalization",
+                        title=f"Processed μ(E) replicate QC: {output_base}",
+                    )
+                    if path is not None:
+                        plot_files.append(path)
+                        processed_mu_replicate_qc_created += 1
+                        log(f"Saving processed μ(E) replicate QC plot: {output_base}")
+                    else:
+                        processed_mu_replicate_qc_skipped.append(f"{output_base}: no finite processed μ(E) traces in plot range")
+                except Exception as exc:
+                    warning = f"Could not save processed μ(E) replicate QC plot for {output_base}: {exc}"
+                    warnings.append(warning)
+                    processed_mu_replicate_qc_skipped.append(f"{output_base}: {exc}")
+                    log("WARNING: " + warning)
+            else:
+                processed_mu_replicate_qc_skipped.append(f"{output_base}: fewer than 2 valid processed scans")
+
         comments = (
             f"# ASTRA XAS Processor version: {config.version}\n"
             f"# Group base name: {base_name}\n"
@@ -857,7 +894,7 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
                     group_name=output_base,
                     replicate_records=normalized_replicate_records,
                     average_record={"energy": master_energy, "mu": norm_avg, "label": "average"},
-                    output_path=replicate_qc_dir / f"{output_base}_replicate_qc.png",
+                    output_path=replicate_qc_dir / f"{output_base}_normalized_replicate_qc.png",
                     energy_range=plot_energy_range,
                     y_label="Normalized intensity",
                 )
@@ -898,7 +935,7 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
     if getattr(config, "save_detector_raw_overview_plot", False):
         path = plot_overview(
             detector_raw_plot_records,
-            plots_dir / "aligned_averaged_IF_overview.png",
+            overview_dir / "aligned_averaged_IF_overview.png",
             "Aligned averaged IF detector signal",
             "IF detector signal",
             energy_range=plot_energy_range,
@@ -907,17 +944,17 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
             plot_files.append(path); log(f"Saved plot: {path}")
 
     if getattr(config, "save_processed_overview_plot", getattr(config, "save_raw_overview_plot", True)):
-        path = plot_overview(processed_plot_records, plots_dir / "processed_mu_overview.png", "Processed μ(E) overview", "Processed μ(E)", energy_range=plot_energy_range)
+        path = plot_overview(processed_plot_records, overview_dir / "processed_mu_overview.png", "Processed μ(E) overview", "Processed μ(E)", energy_range=plot_energy_range)
         if path is not None:
             plot_files.append(path); log(f"Saved plot: {path}")
 
     if getattr(config, "save_bkgcorr_overview_plot", False):
-        path = plot_overview(bkgcorr_plot_records, plots_dir / "background_corrected_overview.png", "Background-corrected overview", "Background-corrected μ(E)", energy_range=plot_energy_range)
+        path = plot_overview(bkgcorr_plot_records, overview_dir / "background_corrected_overview.png", "Background-corrected overview", "Background-corrected μ(E)", energy_range=plot_energy_range)
         if path is not None:
             plot_files.append(path); log(f"Saved plot: {path}")
 
     if getattr(config, "save_norm_overview_plot", True):
-        path = plot_overview(norm_plot_records, plots_dir / "normalized_overview.png", "Normalized overview", "Normalized intensity", energy_range=plot_energy_range)
+        path = plot_overview(norm_plot_records, overview_dir / "normalized_overview.png", "Normalized overview", "Normalized intensity", energy_range=plot_energy_range)
         if path is not None:
             plot_files.append(path); log(f"Saved plot: {path}")
 
@@ -966,6 +1003,8 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
         f.write(f"Normalization order nnorm: {config.nnorm}\n")
         f.write("Normalize-before-average: False (merge μ(E) first, normalize merged spectrum)\n")
         f.write(f"Plots folder: {plots_dir}\n")
+        f.write(f"Overview plots folder: {overview_dir}\n")
+        f.write(f"Replicate QC folder: {replicate_qc_dir}\n")
         f.write(f"Detector raw folder: {output_dir / 'detector_raw'}\n")
         f.write(f"Detector raw files created: {len(detector_raw_files)}\n")
         if getattr(config, "save_detector_health_overview_plot", True):
@@ -994,8 +1033,16 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
                 f.write(f"Analysis signal QC: not created (signal: {signal_name}; reason: {skipped})\n")
         else:
             f.write("Analysis signal QC: disabled\n")
+        if getattr(config, "save_processed_mu_replicate_qc_plot", True):
+            skipped = "; ".join(processed_mu_replicate_qc_skipped) or "None"
+            f.write(
+                f"Processed μ(E) replicate QC plots: created {processed_mu_replicate_qc_created}; "
+                f"skipped: {skipped}\n"
+            )
+        else:
+            f.write("Processed μ(E) replicate QC plots: disabled\n")
         if getattr(config, "save_detector_raw_overview_plot", False):
-            f.write("Aligned averaged IF overview: plots/aligned_averaged_IF_overview.png\n")
+            f.write("Aligned averaged IF overview: plots/overview/aligned_averaged_IF_overview.png\n")
         else:
             f.write("Aligned averaged IF overview: disabled\n")
         f.write("Processed μ(E) files use *_processed.dat; true detector channels use detector_raw/*_detector_raw.dat.\n")
