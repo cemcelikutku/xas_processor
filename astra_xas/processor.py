@@ -813,7 +813,13 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
         log(f"Generating plots in: {plots_dir}")
 
     if getattr(config, "save_detector_raw_overview_plot", False):
-        path = plot_overview(detector_raw_plot_records, plots_dir / "detector_raw_overview.png", "Detector raw overview", "IF detector signal", energy_range=plot_energy_range)
+        path = plot_overview(
+            detector_raw_plot_records,
+            plots_dir / "aligned_averaged_IF_overview.png",
+            "Aligned averaged IF detector signal",
+            "IF detector signal",
+            energy_range=plot_energy_range,
+        )
         if path is not None:
             plot_files.append(path); log(f"Saved plot: {path}")
 
@@ -879,6 +885,10 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
         f.write(f"Plots folder: {plots_dir}\n")
         f.write(f"Detector raw folder: {output_dir / 'detector_raw'}\n")
         f.write(f"Detector raw files created: {len(detector_raw_files)}\n")
+        if getattr(config, "save_detector_raw_overview_plot", False):
+            f.write("Aligned averaged IF overview: plots/aligned_averaged_IF_overview.png\n")
+        else:
+            f.write("Aligned averaged IF overview: disabled\n")
         f.write("Processed μ(E) files use *_processed.dat; true detector channels use detector_raw/*_detector_raw.dat.\n")
         f.write(f"Plots created: {len(plot_files)}\n")
         for plot_file in plot_files:

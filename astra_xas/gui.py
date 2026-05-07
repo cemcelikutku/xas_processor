@@ -376,7 +376,7 @@ class AstraGui(tk.Tk):
 
         ttk.Checkbutton(
             frame,
-            text="Detector raw overview",
+            text="Aligned averaged IF overview",
             variable=self.plot_detector_raw_overview,
         ).grid(row=0, column=0, columnspan=2, sticky="w", pady=2)
 

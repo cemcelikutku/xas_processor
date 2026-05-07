@@ -234,6 +234,7 @@ For each sample group, AstraXAS writes the following to the output directory:
 | `<sample>_flat.dat` | Flattened normalized μ(E) |
 | `detector_raw/<scan>.dat` | Raw detector channels for every individual scan |
 | `plots/replicate_qc/<sample>_replicate_qc.png` | Replicate overlay QC plot |
+| `plots/aligned_averaged_IF_overview.png` | Optional aligned/interpolated/averaged IF detector signal by group |
 | `plots/processed_mu_overview.png` | All merged processed μ(E) spectra overlaid |
 | `plots/background_corrected_overview.png` | All background-corrected spectra overlaid |
 | `plots/normalized_overview.png` | All normalized spectra overlaid |
@@ -246,6 +247,8 @@ For each sample group, AstraXAS writes the following to the output directory:
 | `ASTRA_group_summary.dat` | Sample names, foil assignments, replicate counts |
 
 All `.dat` files have a commented header listing parameters and column names, and spectral `.dat` files are directly loadable in the Spectrum Viewer.
+
+Note: `plots/detector_raw_overview.png` was the former name for the aligned averaged IF overview. Current runs write only `plots/aligned_averaged_IF_overview.png`.
 
 ---
 
@@ -294,7 +297,7 @@ All processing parameters are exposed in the GUI and saveable as JSON config fil
 | `outlier_rms_threshold` | RMS deviation threshold for outlier detection |
 | `enable_shift_rejection` | Exclude replicates with large energy shifts |
 | `reject_shift_abs_eV` | Shift threshold for rejection (eV) |
-| `save_detector_raw_overview_plot` | Save an overview plot of detector raw IF signal |
+| `save_detector_raw_overview_plot` | Save the aligned averaged IF overview plot; legacy config name retained for compatibility |
 | `save_processed_overview_plot` | Save an overview plot of merged processed μ(E) spectra |
 | `save_bkgcorr_overview_plot` | Save an overview plot of background-corrected spectra |
 | `save_norm_overview_plot` | Save an overview plot of normalized spectra |
