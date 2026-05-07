@@ -49,6 +49,9 @@ class AstraConfig:
     reject_shift_abs_eV: float = 3.0
     enable_auto_outlier_detection: bool = False
     outlier_rms_threshold: float = 0.08
+    enable_detector_jump_warnings: bool = True
+    detector_jump_threshold: float = 10.0
+    detector_jump_min_relative: float = 0.05
 
     # Automatic plots. Avoid using "raw" for processed μ(E); true raw detector channels are separate.
     save_detector_health_overview_plot: bool = True

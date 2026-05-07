@@ -52,6 +52,7 @@ class AstraGui(tk.Tk):
         self.alignment_quality_warn_threshold = tk.StringVar(value="0.7")
         self.alignment_grid_points = tk.StringVar(value="50")
         self.save_drift_plot = tk.BooleanVar(value=False)
+        self.enable_detector_jump_warnings = tk.BooleanVar(value=True)
         self.fluo_factor = tk.StringVar(value="1e-11")
         self.enable_deglitching = tk.BooleanVar(value=False)
         self.deglitch_mode = tk.StringVar(value="automatic")
@@ -311,6 +312,21 @@ class AstraGui(tk.Tk):
             text="Save drift plot",
             variable=self.save_drift_plot,
         ).grid(row=len(rows), column=0, columnspan=4, sticky="w", pady=(5, 0))
+
+        diagnostics_row = len(rows) + 1
+        ttk.Separator(frame).grid(row=diagnostics_row, column=0, columnspan=4, sticky="ew", pady=(10, 6))
+        ttk.Label(frame, text="Detector diagnostics").grid(
+            row=diagnostics_row + 1,
+            column=0,
+            columnspan=4,
+            sticky="w",
+            pady=(0, 3),
+        )
+        ttk.Checkbutton(
+            frame,
+            text="Detector jump warnings",
+            variable=self.enable_detector_jump_warnings,
+        ).grid(row=diagnostics_row + 2, column=0, columnspan=4, sticky="w", pady=(0, 3))
 
     def _build_deglitch_section(self, parent):
         frame = ttk.LabelFrame(
@@ -728,6 +744,7 @@ class AstraGui(tk.Tk):
             manual_deglitch_min_energy=manual_deglitch_min_energy,
             manual_deglitch_max_energy=manual_deglitch_max_energy,
             manual_deglitch_margin_points=manual_deglitch_margin_points,
+            enable_detector_jump_warnings=self.enable_detector_jump_warnings.get(),
             save_detector_health_overview_plot=self.plot_detector_health_overview.get(),
             save_analysis_signal_qc_plot=self.plot_analysis_signal_qc.get(),
             save_detector_raw_overview_plot=self.plot_detector_raw_overview.get(),
@@ -777,6 +794,7 @@ class AstraGui(tk.Tk):
             "manual_deglitch_min_energy": c.manual_deglitch_min_energy,
             "manual_deglitch_max_energy": c.manual_deglitch_max_energy,
             "manual_deglitch_margin_points": c.manual_deglitch_margin_points,
+            "enable_detector_jump_warnings": c.enable_detector_jump_warnings,
             "save_detector_health_overview_plot": getattr(c, "save_detector_health_overview_plot", True),
             "save_analysis_signal_qc_plot": getattr(c, "save_analysis_signal_qc_plot", True),
             "save_detector_raw_overview_plot": getattr(c, "save_detector_raw_overview_plot", False),
@@ -822,6 +840,7 @@ class AstraGui(tk.Tk):
             "manual_deglitch_min_energy": self.manual_deglitch_min_energy,
             "manual_deglitch_max_energy": self.manual_deglitch_max_energy,
             "manual_deglitch_margin_points": self.manual_deglitch_margin_points,
+            "enable_detector_jump_warnings": self.enable_detector_jump_warnings,
             "save_detector_health_overview_plot": self.plot_detector_health_overview,
             "save_analysis_signal_qc_plot": self.plot_analysis_signal_qc,
             "save_detector_raw_overview_plot": self.plot_detector_raw_overview,

@@ -220,6 +220,14 @@ Warnings are printed in the processing log and written to a dedicated `Validatio
 
 ---
 
+## Detector jump diagnostics
+
+When `enable_detector_jump_warnings=True`, AstraXAS runs a diagnostic-only detector jump check on raw detector channels after alignment shifts are known and before any deglitching or averaging. It can write `ASTRA_detector_jumps.dat` when spike-like jumps are detected, and it adds a conservative summary-level detector-jump count to `ASTRA_group_summary.dat`.
+
+This check uses point-to-point MAD thresholding plus recovery-window spike-vs-step discrimination, so monotonic absorption-edge-like steps are not treated as detector jumps. The detailed table can include raw-channel, FDT, and derived-signal sharp features, but the main processing report emphasizes significant raw-channel jumps outside the edge/alignment window; derived-signal edge features and low-severity FDT points are excluded from the main summary. It never modifies detector arrays, processed spectra, normalized spectra, alignment shifts, or plot data.
+
+---
+
 ## Deglitching
 
 AstraXAS includes optional deglitching for scan-level artifacts. Deglitching operates on each aligned replicate before replicate averaging. The merge-then-normalize workflow is preserved: corrected μ(E) replicates are merged first, and Larch `pre_edge` normalization is applied once to the merged spectrum.
@@ -308,6 +316,7 @@ For each sample group, AstraXAS writes the following to the output directory:
 | `plots/overview/normalized_overview.png` | All normalized spectra overlaid |
 | `plots/overview/drift_tracker.png` | Optional scan-by-scan energy shift plot, written when `save_drift_plot=True` |
 | `<sample>_deglitch_log.dat` | Deglitch point log, written only when deglitching modifies points |
+| `ASTRA_detector_jumps.dat` | Diagnostic detector jump records, written only when jump-like spikes are detected |
 | `ASTRA_processing_report.txt` | Full parameter log, validation warnings, processing warnings, plot file lists, replicate QC counts, per-group summary, low-quality alignment count, and deglitch point counts |
 | `ASTRA_energy_shifts.dat` | Per-sample shift table with alignment-anchor metadata: filename, base name, replicate id, assigned foil/reference, shift, alignment quality |
 | `ASTRA_foil_alignment.dat` | Per-foil or inline-reference alignment table with alignment-anchor metadata: filename, shift, fit error, alignment quality |
@@ -370,6 +379,9 @@ All processing parameters are exposed in the GUI and saveable as JSON config fil
 | `outlier_rms_threshold` | RMS deviation threshold for outlier detection |
 | `enable_shift_rejection` | Exclude replicates with large energy shifts |
 | `reject_shift_abs_eV` | Shift threshold for rejection (eV) |
+| `enable_detector_jump_warnings` | Run diagnostic-only raw detector jump warnings; default `True` |
+| `detector_jump_threshold` | Point-to-point MAD multiplier for detector jump warnings; default `10.0` |
+| `detector_jump_min_relative` | Minimum relative jump size for detector jump warnings; default `0.05` |
 | `save_detector_health_overview_plot` | Save `plots/overview/detector_health_overview.png`; default `True` |
 | `save_analysis_signal_qc_plot` | Save `plots/overview/analysis_signal_qc.png`; default `True` |
 | `save_detector_raw_overview_plot` | Save `plots/overview/aligned_averaged_IF_overview.png`; legacy config name retained for compatibility |

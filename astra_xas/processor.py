@@ -24,6 +24,8 @@ SHIFT_CONVENTION = (
     "positive shift_eV means +shift_eV is added to the scan energy before "
     "interpolation/averaging; shifts are relative to the alignment anchor."
 )
+RAW_DETECTOR_JUMP_CHANNELS = {"I0", "I1", "I2", "IF", "FDT"}
+DERIVED_DETECTOR_JUMP_CHANNELS = {"IF_over_I0", "ln_I0_I1", "ln_I1_I2"}
 
 
 def interpolate_to_grid(E_source, mu_source, E_target, kind="linear"):
@@ -289,6 +291,213 @@ def _validate_processing_inputs(entries: list[dict], config: AstraConfig) -> tup
     warnings_out = list(dict.fromkeys(warnings_out))
     fatal_errors = list(dict.fromkeys(fatal_errors))
     return warnings_out, fatal_errors
+
+
+def detect_detector_jumps(
+    energy: np.ndarray,
+    channel: np.ndarray,
+    channel_name: str,
+    config: AstraConfig,
+    filename: str,
+) -> list[dict]:
+    energy = np.asarray(energy, dtype=float)
+    channel = np.asarray(channel, dtype=float)
+    finite_mask = np.isfinite(energy) & np.isfinite(channel)
+    energy_c = energy[finite_mask]
+    channel_c = channel[finite_mask]
+    if len(energy_c) < 20:
+        return []
+    if np.nanstd(channel_c) == 0:
+        return []
+
+    dch = np.abs(np.diff(channel_c))
+    if len(dch) == 0:
+        return []
+
+    threshold = _config_float(config, "detector_jump_threshold", 10.0)
+    min_relative = _config_float(config, "detector_jump_min_relative", 0.05)
+    noise_mad = np.median(np.abs(dch - np.median(dch)))
+    severity_noise_mad = max(float(noise_mad), 1e-12)
+    if noise_mad < 1e-12:
+        noise_mad = np.std(dch) + 1e-12
+    if not np.isfinite(noise_mad) or noise_mad <= 0:
+        return []
+
+    records = []
+    candidate_indices = np.where(dch > threshold * noise_mad)[0]
+    for i in candidate_indices:
+        i = int(i)
+        look_ahead = min(5, len(dch) - i - 1)
+        recovery_window = dch[i + 1 : i + 1 + look_ahead]
+
+        is_spike = len(recovery_window) == 0
+        ch_diff_at_i = channel_c[i + 1] - channel_c[i]
+        if not is_spike:
+            for j in range(len(recovery_window)):
+                ch_diff_at_j = channel_c[i + 2 + j] - channel_c[i + 1 + j]
+                if (
+                    ch_diff_at_j * ch_diff_at_i < 0
+                    and abs(ch_diff_at_j) > (threshold / 3.0) * noise_mad
+                ):
+                    is_spike = True
+                    break
+        if not is_spike:
+            continue
+
+        signal_at_i = max(abs(channel_c[i]), abs(channel_c[i + 1]), 1e-12)
+        relative_jump = dch[i] / signal_at_i
+        if relative_jump < min_relative:
+            continue
+
+        ratio = dch[i] / severity_noise_mad
+        if ratio > 5.0 * threshold:
+            severity = "high"
+        elif ratio > 2.0 * threshold:
+            severity = "medium"
+        else:
+            severity = "low"
+
+        energy_at_jump = float(energy_c[i])
+        e0 = config.e0
+        inside_plot_window = config.plot_energy_min <= energy_at_jump <= config.plot_energy_max
+        inside_alignment_window = config.align_window_min <= energy_at_jump <= config.align_window_max
+        inside_preedge_window = (e0 + config.pre1) <= energy_at_jump <= (e0 + config.pre2)
+        inside_norm_window = (e0 + config.norm1) <= energy_at_jump <= (e0 + config.norm2)
+
+        notes = []
+        if inside_alignment_window:
+            notes.append("in alignment window")
+        if inside_preedge_window:
+            notes.append("in pre-edge window")
+        if inside_norm_window:
+            notes.append("in norm window")
+        if channel_name in ("IF_over_I0", "ln_I0_I1", "ln_I1_I2"):
+            notes.append("derived signal: edge region jumps may be real features")
+
+        records.append({
+            "_index": i,
+            "filename": filename,
+            "channel": channel_name,
+            "energy_eV": energy_at_jump,
+            "jump_size": float(dch[i]),
+            "relative_jump": float(relative_jump),
+            "severity": severity,
+            "inside_plot_window": bool(inside_plot_window),
+            "inside_alignment_window": bool(inside_alignment_window),
+            "inside_preedge_window": bool(inside_preedge_window),
+            "inside_norm_window": bool(inside_norm_window),
+            "note": "; ".join(notes) if notes else "",
+        })
+
+    deduped = []
+    for record in records:
+        if not deduped or record["_index"] - deduped[-1]["_index"] > 3:
+            deduped.append(record)
+        elif record["jump_size"] > deduped[-1]["jump_size"]:
+            deduped[-1] = record
+    for record in deduped:
+        record.pop("_index", None)
+    return deduped
+
+
+def _detector_jump_sort_key(record: dict):
+    severity_rank = {"high": 0, "medium": 1, "low": 2}
+    return (
+        severity_rank.get(record.get("severity"), 99),
+        str(record.get("filename", "")),
+        float(record.get("energy_eV", 0.0)),
+    )
+
+
+def _annotate_detector_jump_summary_inclusion(records: list[dict]) -> None:
+    for record in records:
+        channel = record.get("channel", "")
+        severity = record.get("severity", "low")
+        inside_alignment = bool(record.get("inside_alignment_window"))
+        relative_jump = float(record.get("relative_jump", 0.0))
+        include = True
+        reasons = []
+
+        if channel in DERIVED_DETECTOR_JUMP_CHANNELS:
+            include = False
+            reasons.append("excluded from main summary: derived signal")
+        elif channel not in RAW_DETECTOR_JUMP_CHANNELS:
+            include = False
+            reasons.append("excluded from main summary: non-standard channel")
+
+        if include and channel == "FDT" and severity == "low":
+            include = False
+            reasons.append("excluded from main summary: low-severity FDT diagnostic")
+
+        if include and inside_alignment:
+            include = severity == "high" and channel != "FDT" and relative_jump >= 0.5
+            if not include:
+                reasons.append("excluded from main summary: edge/alignment window")
+
+        record["include_in_summary"] = bool(include)
+        if reasons:
+            note = record.get("note", "")
+            reason_note = "; ".join(reasons)
+            record["note"] = f"{note}; {reason_note}" if note else reason_note
+
+
+def _write_detector_jumps(path: Path, records: list[dict], config: AstraConfig) -> None:
+    threshold = _config_float(config, "detector_jump_threshold", 10.0)
+    with path.open("w", encoding="utf-8") as f:
+        f.write("# ASTRA detector jump diagnostics\n")
+        f.write("# Generated by AstraXAS\n")
+        f.write("# Jump detected using point-to-point MAD spike detector\n")
+        f.write(
+            f"# Severity: low={threshold:g}-{2 * threshold:g}x MAD, "
+            f"medium={2 * threshold:g}-{5 * threshold:g}x MAD, "
+            f"high=>{5 * threshold:g}x MAD\n"
+        )
+        f.write(f"# Threshold multiplier: {threshold}\n")
+        f.write(f"# Min relative jump: {_config_float(config, 'detector_jump_min_relative', 0.05)}\n")
+        f.write("# Spike vs step discrimination: recovery window = 5 points\n")
+        f.write("# include_in_summary: True only for significant raw-channel jumps emphasized in ASTRA_processing_report.txt\n")
+        f.write("# NOTE: This file is diagnostic only. No data was modified.\n")
+        f.write("#\n")
+        f.write(
+            "# filename\tchannel\tenergy_eV\tjump_size\trelative_jump\tseverity\t"
+            "inside_plot_window\tinside_alignment_window\tinside_preedge_window\t"
+            "inside_norm_window\tinclude_in_summary\tnote\n"
+        )
+        for record in sorted(records, key=_detector_jump_sort_key):
+            f.write(
+                f"{record['filename']}\t{record['channel']}\t{record['energy_eV']:.6f}\t"
+                f"{record['jump_size']:.8g}\t{record['relative_jump']:.8g}\t"
+                f"{record['severity']}\t{record['inside_plot_window']}\t"
+                f"{record['inside_alignment_window']}\t{record['inside_preedge_window']}\t"
+                f"{record['inside_norm_window']}\t{record.get('include_in_summary', False)}\t"
+                f"{record['note']}\n"
+            )
+
+
+def _detector_jump_energy_regions(records: list[dict]) -> str:
+    if not records:
+        return "None"
+    energies = sorted(float(record["energy_eV"]) for record in records)
+    regions = []
+    start = energies[0]
+    prev = energies[0]
+    count = 1
+    for energy in energies[1:]:
+        if energy - prev <= 5.0:
+            prev = energy
+            count += 1
+        else:
+            if count == 1:
+                regions.append(f"{start:.1f} eV")
+            else:
+                regions.append(f"{start:.1f}-{prev:.1f} eV ({count})")
+            start = prev = energy
+            count = 1
+    if count == 1:
+        regions.append(f"{start:.1f} eV")
+    else:
+        regions.append(f"{start:.1f}-{prev:.1f} eV ({count})")
+    return ", ".join(regions)
 
 
 def _entry_from_scan(scan: dict, config: AstraConfig, path: Path | None = None) -> dict:
@@ -881,6 +1090,83 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
     if not sample_entries:
         raise RuntimeError("No sample files found.")
 
+    all_jump_records: list[dict] = []
+    detector_jump_diagnostic = {"status": "disabled", "error": ""}
+    if _config_bool(config, "enable_detector_jump_warnings", True):
+        try:
+            for scan in entries:
+                shifted_energy = np.asarray(scan.get("energy"), dtype=float) + float(scan.get("energy_shift_eV", 0.0))
+                raw_channels_to_check = {
+                    "I0": scan.get("I0"),
+                    "I1": scan.get("I1"),
+                    "I2": scan.get("I2"),
+                    "IF": scan.get("IF"),
+                    "FDT": scan.get("FDT"),
+                }
+                try:
+                    i0 = scan.get("I0")
+                    i1 = scan.get("I1")
+                    i2 = scan.get("I2")
+                    if_ = scan.get("IF")
+                    if i0 is not None and if_ is not None:
+                        i0 = np.asarray(i0, dtype=float)
+                        if_ = np.asarray(if_, dtype=float)
+                        with np.errstate(divide="ignore", invalid="ignore"):
+                            raw_channels_to_check["IF_over_I0"] = np.where(i0 > 0, if_ / i0, np.nan)
+                    if i0 is not None and i1 is not None:
+                        i0 = np.asarray(i0, dtype=float)
+                        i1 = np.asarray(i1, dtype=float)
+                        with np.errstate(divide="ignore", invalid="ignore"):
+                            raw_channels_to_check["ln_I0_I1"] = np.where(i1 > 0, np.log(i0 / i1), np.nan)
+                    if i1 is not None and i2 is not None:
+                        i1 = np.asarray(i1, dtype=float)
+                        i2 = np.asarray(i2, dtype=float)
+                        with np.errstate(divide="ignore", invalid="ignore"):
+                            raw_channels_to_check["ln_I1_I2"] = np.where(i2 > 0, np.log(i1 / i2), np.nan)
+                except Exception:
+                    pass
+
+                for ch_name, ch_data in raw_channels_to_check.items():
+                    if ch_data is None:
+                        continue
+                    try:
+                        records = detect_detector_jumps(
+                            shifted_energy,
+                            ch_data,
+                            ch_name,
+                            config,
+                            scan.get("filename", "unknown"),
+                        )
+                        all_jump_records.extend(records)
+                    except Exception as exc:
+                        detector_jump_diagnostic = {"status": "error", "error": str(exc)}
+                        log(f"WARNING: Detector jump diagnostic failed for {scan.get('filename', 'unknown')} {ch_name}: {exc}")
+
+            detector_jump_path = output_dir / "ASTRA_detector_jumps.dat"
+            if all_jump_records:
+                _annotate_detector_jump_summary_inclusion(all_jump_records)
+                _write_detector_jumps(detector_jump_path, all_jump_records, config)
+                detector_jump_diagnostic = {
+                    "status": "found" if detector_jump_diagnostic["status"] != "error" else "error",
+                    "error": detector_jump_diagnostic["error"],
+                }
+            else:
+                if detector_jump_path.exists():
+                    detector_jump_path.unlink()
+                if detector_jump_diagnostic["status"] != "error":
+                    detector_jump_diagnostic = {"status": "none", "error": ""}
+        except Exception as exc:
+            detector_jump_diagnostic = {"status": "error", "error": str(exc)}
+            warnings.append(f"Detector jump diagnostics failed: {exc}")
+            log("WARNING: Detector jump diagnostics failed: " + str(exc))
+    else:
+        try:
+            detector_jump_path = output_dir / "ASTRA_detector_jumps.dat"
+            if detector_jump_path.exists():
+                detector_jump_path.unlink()
+        except Exception:
+            pass
+
     enable_shift_rejection = _config_bool(config, "enable_shift_rejection", False)
     reject_shift_abs_eV = _config_float(config, "reject_shift_abs_eV", 3.0)
     if enable_shift_rejection:
@@ -1227,7 +1513,21 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
             else:
                 normalized_replicate_qc_skipped.append(f"{output_base}: fewer than 2 valid normalized scans")
 
-        group_summary_rows.append([output_base, base_name, assigned_foil, str(len(processed_array)), source_filenames[0], source_filenames[-1]])
+        group_filenames = set(source_filenames)
+        detector_jump_count = sum(
+            1
+            for record in all_jump_records
+            if record.get("filename") in group_filenames and record.get("include_in_summary")
+        )
+        group_summary_rows.append([
+            output_base,
+            base_name,
+            assigned_foil,
+            str(len(processed_array)),
+            source_filenames[0],
+            source_filenames[-1],
+            str(detector_jump_count),
+        ])
         std_str = "N/A" if not np.isfinite(std_edge_step) else f"{std_edge_step:.8g}"
         group_norm_metadata_rows.append([output_base, f"{mean_edge_step:.8g}", std_str, f"{mean_norm_e0:.8g}", str(config.nnorm)])
 
@@ -1291,7 +1591,8 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
             f.write("# None\n")
 
     with open(output_dir / "ASTRA_group_summary.dat", "w", encoding="utf-8") as f:
-        f.write("# output_base\tbase_name\tassigned_foil\tn_scans_used\tfirst_scan\tlast_scan\n")
+        f.write("# output_base\tbase_name\tassigned_foil\tn_scans_used\tfirst_scan\tlast_scan\tdetector_jumps\n")
+        f.write("# detector_jumps: number of summary-level detector jump records among scans used in the group; data are not modified.\n")
         for row in group_summary_rows:
             f.write("\t".join(row) + "\n")
 
@@ -1342,6 +1643,74 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
             f"Low-quality alignments (quality < {config.alignment_quality_warn_threshold}): "
             f"{low_quality_count}\n"
         )
+        f.write("\nDetector jump diagnostics:\n")
+        if detector_jump_diagnostic["status"] == "disabled":
+            f.write("Detector jump diagnostics: disabled\n")
+        elif detector_jump_diagnostic["status"] == "error":
+            f.write(
+                "Detector jump diagnostics: ERROR - diagnostic failed "
+                f"({detector_jump_diagnostic['error']})\n"
+            )
+            f.write("process_folder completed normally; no data was affected\n")
+        elif detector_jump_diagnostic["status"] == "none":
+            f.write("Detector jump diagnostics: none detected\n")
+        else:
+            summary_records = [record for record in all_jump_records if record.get("include_in_summary")]
+            channel_counts = {}
+            severity_counts = {"high": 0, "medium": 0, "low": 0}
+            derived_count = 0
+            edge_alignment_excluded = 0
+            fdt_excluded = 0
+            for record in all_jump_records:
+                channel = record.get("channel", "unknown")
+                if channel in DERIVED_DETECTOR_JUMP_CHANNELS:
+                    derived_count += 1
+                if record.get("inside_alignment_window") and not record.get("include_in_summary"):
+                    edge_alignment_excluded += 1
+                if channel == "FDT" and not record.get("include_in_summary"):
+                    fdt_excluded += 1
+            for record in summary_records:
+                channel = record.get("channel", "unknown")
+                channel_counts[channel] = channel_counts.get(channel, 0) + 1
+                severity = record.get("severity", "low")
+                severity_counts[severity] = severity_counts.get(severity, 0) + 1
+            f.write(
+                "  Significant raw-channel jumps outside edge/alignment window: "
+                f"{len(summary_records)}\n"
+            )
+            f.write(f"  Full diagnostic entries: {len(all_jump_records)}\n")
+            f.write("  Full diagnostic entries written to: ASTRA_detector_jumps.dat\n")
+            f.write(
+                "  Entries excluded from main summary: "
+                f"derived-signal features={derived_count}; "
+                f"edge/alignment-window features={edge_alignment_excluded}; "
+                f"low-severity/noisy FDT features={fdt_excluded}\n"
+            )
+            f.write("  Main affected channels:\n")
+            if channel_counts:
+                for channel in sorted(channel_counts):
+                    f.write(f"    {channel}: {channel_counts[channel]} jump(s)\n")
+            else:
+                f.write("    None\n")
+            f.write(f"  Main affected energy regions: {_detector_jump_energy_regions(summary_records)}\n")
+            f.write("  By severity:\n")
+            f.write(f"    high: {severity_counts.get('high', 0)}\n")
+            f.write(f"    medium: {severity_counts.get('medium', 0)}\n")
+            f.write(f"    low: {severity_counts.get('low', 0)}\n")
+            f.write("  Jumps inside critical windows:\n")
+            f.write(
+                "    alignment window: "
+                f"{sum(1 for record in summary_records if record.get('inside_alignment_window'))}\n"
+            )
+            f.write(
+                "    pre-edge window:  "
+                f"{sum(1 for record in summary_records if record.get('inside_preedge_window'))}\n"
+            )
+            f.write(
+                "    norm window:      "
+                f"{sum(1 for record in summary_records if record.get('inside_norm_window'))}\n"
+            )
+        f.write("\n")
         f.write(f"Auto-deglitched points: {total_auto_deglitched_points}\n")
         f.write(f"Manually range-interpolated points: {total_manual_range_interpolated_points}\n")
         f.write(f"Deglitch note: {AUTO_DEGLITCH_WARNING}\n")
