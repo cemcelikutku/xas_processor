@@ -15,6 +15,14 @@ from .edge_presets import get_edge_preset
 from .grouping import group_samples
 from .export import save_two_col
 from .plotting import plot_overview, plot_replicate_qc, plot_drift, plot_detector_health_overview, plot_analysis_signal_qc
+from .self_absorption import (
+    SelfAbsorptionResult,
+    evaluate_self_absorption_for_group,
+    get_self_absorption_sensitivity,
+    get_self_absorption_threshold,
+    plot_self_absorption_qc,
+    write_self_absorption_flags,
+)
 
 
 AUTO_DEGLITCH_WARNING = (
@@ -807,6 +815,8 @@ def _read_dat_table_preview(path: Path, max_rows: int = 12, max_cols: int = 8) -
                     "mean_edge_step",
                     "shift_eV",
                     "event_id",
+                    "sample",
+                    "status",
                 }
                 if len(parts) > 1 and any(part in known_columns for part in parts):
                     header = parts
@@ -1033,6 +1043,8 @@ def _write_pdf_qc_report(output_path: Path, context: dict) -> None:
     summary_records = [record for record in jump_records if record.get("include_in_summary")]
     fdt_count = sum(1 for record in jump_records if record.get("channel") in FDT_DETECTOR_JUMP_CHANNELS)
     derived_count = sum(1 for record in jump_records if record.get("channel") in DERIVED_DETECTOR_JUMP_CHANNELS)
+    self_absorption_summary = context.get("self_absorption_summary", {})
+    self_absorption_results = context.get("self_absorption_results", [])
     validation_warnings_pdf = context.get("validation_warnings", [])
     processing_warnings_pdf = context.get("processing_warnings", [])
     low_quality_count_pdf = int(context.get("low_quality_count", 0) or 0)
@@ -1126,6 +1138,29 @@ def _write_pdf_qc_report(output_path: Path, context: dict) -> None:
     else:
         detector_summary = ["Disabled"]
     add_list("Detector jump diagnostics", detector_summary)
+    if self_absorption_summary.get("enabled"):
+        self_absorption_lines = [
+            "Heuristic diagnostic only. It flags likely fluorescence self-absorption when the fluorescence white-line amplitude is suppressed relative to the simultaneously available sample transmission signal.",
+            f"Sensitivity: {self_absorption_summary.get('sensitivity', 'normal')}",
+            f"Threshold: {float(self_absorption_summary.get('threshold', 0.85)):.4f}",
+            f"Groups checked: {self_absorption_summary.get('checked', 0)}",
+            f"Groups flagged: {self_absorption_summary.get('flagged', 0)}",
+            f"Groups skipped: {self_absorption_summary.get('skipped', 0)}",
+        ]
+        flagged = [result for result in self_absorption_results if result.status == "flagged"]
+        for result in flagged[:8]:
+            self_absorption_lines.append(
+                f"{result.sample}: ratio={result.ratio_fluo_over_trans:.4f}, "
+                f"threshold={result.threshold_used:.4f}, severity={result.severity}"
+            )
+        if len(flagged) > 8:
+            self_absorption_lines.append(f"... {len(flagged) - 8} more flagged group(s)")
+    else:
+        self_absorption_lines = [
+            self_absorption_summary.get("reason")
+            or "disabled because analysis mode is not fluorescence"
+        ]
+    add_list("Self-absorption diagnostic", self_absorption_lines)
     add_key_value_table([
         ("Low-quality alignments", context.get("low_quality_count", 0)),
         ("Auto-deglitched points", context.get("total_auto_deglitched_points", 0)),
@@ -1197,11 +1232,14 @@ def _write_pdf_qc_report(output_path: Path, context: dict) -> None:
     ]
     if (output_dir / "ASTRA_detector_jumps.dat").exists():
         main_outputs.insert(5, "ASTRA_detector_jumps.dat")
+    if (output_dir / "ASTRA_self_absorption_flags.dat").exists():
+        main_outputs.insert(6, "ASTRA_self_absorption_flags.dat")
     add_list("Main output files", main_outputs)
 
     add_heading("Summary Tables", 2)
     add_table_preview(output_dir / "ASTRA_normalization_summary.dat", "Normalization summary")
     add_table_preview(output_dir / "ASTRA_energy_shifts.dat", "Energy shifts", max_rows=12, max_cols=8)
+    add_table_preview(output_dir / "ASTRA_self_absorption_flags.dat", "Self-absorption flags", max_rows=12, max_cols=8)
     story.append(para("Detector jump diagnostic header", "Heading3"))
     if jump_lines:
         story.append(Preformatted("\n".join(jump_lines[:18]), styles["Code"]))
@@ -1309,6 +1347,18 @@ def _safe_attr(group: Group, name: str, default=None):
         return getattr(group, name)
     except AttributeError:
         return default
+
+
+def _nanmean_without_warning(values) -> np.ndarray:
+    values = np.asarray(values, dtype=float)
+    if values.ndim == 1:
+        return values
+    counts = np.sum(np.isfinite(values), axis=0)
+    sums = np.nansum(values, axis=0)
+    out = np.full(values.shape[1], np.nan, dtype=float)
+    valid = counts > 0
+    out[valid] = sums[valid] / counts[valid]
+    return out
 
 
 def _run_pre_edge(energy, mu, config: AstraConfig) -> dict:
@@ -1584,6 +1634,11 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
         or getattr(config, "save_processed_mu_replicate_qc_plot", True)
         or getattr(config, "save_replicate_qc_plots", True)
         or getattr(config, "save_drift_plot", False)
+        or (
+            getattr(config, "analysis_mode", "fluo") == "fluo"
+            and getattr(config, "enable_self_absorption_check", True)
+            and getattr(config, "save_self_absorption_qc_plots", True)
+        )
     )
     if plots_enabled:
         plots_dir.mkdir(parents=True, exist_ok=True)
@@ -1591,6 +1646,11 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
         if (
             getattr(config, "save_processed_mu_replicate_qc_plot", True)
             or getattr(config, "save_replicate_qc_plots", True)
+            or (
+                getattr(config, "analysis_mode", "fluo") == "fluo"
+                and getattr(config, "enable_self_absorption_check", True)
+                and getattr(config, "save_self_absorption_qc_plots", True)
+            )
         ):
             replicate_qc_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2030,18 +2090,39 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
     processed_mu_replicate_qc_skipped: list[str] = []
     normalized_replicate_qc_created = 0
     normalized_replicate_qc_skipped: list[str] = []
+    self_absorption_results: list[SelfAbsorptionResult] = []
+    self_absorption_should_run = (
+        getattr(config, "analysis_mode", "fluo") == "fluo"
+        and _config_bool(config, "enable_self_absorption_check", True)
+    )
+    self_absorption_summary = {
+        "enabled": self_absorption_should_run,
+        "reason": "",
+        "threshold": get_self_absorption_threshold(config),
+        "sensitivity": get_self_absorption_sensitivity(config),
+        "checked": 0,
+        "flagged": 0,
+        "skipped": 0,
+        "path": None,
+    }
+    if getattr(config, "analysis_mode", "fluo") != "fluo":
+        self_absorption_summary["reason"] = "disabled because analysis mode is not fluorescence"
+    elif not _config_bool(config, "enable_self_absorption_check", True):
+        self_absorption_summary["reason"] = "disabled by user"
 
     for (base_name, assigned_foil), scans in groups.items():
         log(f"Processing group: {base_name} ({len(scans)} scan(s))")
         first_scan = scans[0]
         master_energy = first_scan["energy"] + first_scan["energy_shift_eV"]
         processed_spectra = []
+        trans_spectra = []
         source_filenames = []
         detector_group_if = []
         deglitch_records = []  # Collect deglitch info per replicate
 
         for s in scans:
-            shifted_energy = s["energy"] + s["energy_shift_eV"]
+            raw_shifted_energy = s["energy"] + s["energy_shift_eV"]
+            shifted_energy = raw_shifted_energy
             mu = get_signal(s, config.analysis_mode)
             shifted_energy, mu, flagged_energies = auto_deglitch(shifted_energy, mu, config)
             if flagged_energies:
@@ -2067,6 +2148,30 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
                 mu_interp = np.interp(master_energy, master_energy[valid], mu_interp[valid])
             processed_spectra.append(mu_interp)
             source_filenames.append(s["filename"])
+
+            if self_absorption_should_run:
+                trans_interp = np.full_like(master_energy, np.nan, dtype=float)
+                try:
+                    i0 = s.get("I0")
+                    i1 = s.get("I1")
+                    if i0 is not None and i1 is not None:
+                        i0 = np.asarray(i0, dtype=float)
+                        i1 = np.asarray(i1, dtype=float)
+                        with np.errstate(divide="ignore", invalid="ignore"):
+                            mu_trans_diag = np.where(
+                                np.isfinite(i0) & np.isfinite(i1) & (i0 > 0) & (i1 > 0),
+                                np.log(i0 / i1),
+                                np.nan,
+                            )
+                        candidate = interpolate_to_grid(raw_shifted_energy, mu_trans_diag, master_energy, kind=config.interp_kind)
+                        valid_trans = np.isfinite(candidate)
+                        if np.count_nonzero(valid_trans) >= 0.9 * len(master_energy):
+                            if not np.all(valid_trans):
+                                candidate = np.interp(master_energy, master_energy[valid_trans], candidate[valid_trans])
+                            trans_interp = candidate
+                except Exception:
+                    pass
+                trans_spectra.append(trans_interp)
 
             if s.get("IF") is not None:
                 if_interp = interpolate_to_grid(shifted_energy, s["IF"], master_energy, kind=config.interp_kind)
@@ -2106,6 +2211,10 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
                 keep_mask[:] = True
 
         processed_array = processed_array[keep_mask]
+        if self_absorption_should_run:
+            trans_array = np.asarray(trans_spectra, dtype=float)[keep_mask]
+        else:
+            trans_array = None
         source_filenames = [name for name, keep in zip(source_filenames, keep_mask) if keep]
         deglitch_records = [rec for rec, keep in zip(deglitch_records, keep_mask) if keep]
         total_auto_deglitched_points += sum(r["n_flagged_auto"] for r in deglitch_records)
@@ -2133,6 +2242,69 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
         norm_array = np.asarray(norm_reps, dtype=float)
 
         output_base = sanitize_name(base_name)
+
+        if self_absorption_should_run:
+            try:
+                trans_avg = _nanmean_without_warning(trans_array)
+                result = evaluate_self_absorption_for_group(
+                    output_base,
+                    master_energy,
+                    processed_avg,
+                    trans_avg,
+                    config,
+                    n_replicates_used=len(processed_array),
+                    normalize_func=_run_pre_edge,
+                )
+            except Exception as exc:
+                result = SelfAbsorptionResult(
+                    sample=output_base,
+                    status="skipped",
+                    severity="none",
+                    ratio_fluo_over_trans=float("nan"),
+                    fluo_white_line_amplitude=float("nan"),
+                    trans_white_line_amplitude=float("nan"),
+                    threshold_used=get_self_absorption_threshold(config),
+                    sensitivity=get_self_absorption_sensitivity(config),
+                    white_line_window_eV=(
+                        config.e0 + getattr(config, "self_absorption_wl_min", 0.0),
+                        config.e0 + getattr(config, "self_absorption_wl_max", 35.0),
+                    ),
+                    continuum_window_eV=(
+                        config.e0 + getattr(config, "self_absorption_cont_min", 50.0),
+                        config.e0 + getattr(config, "self_absorption_cont_max", 150.0),
+                    ),
+                    n_replicates_used=len(processed_array),
+                    note=f"skipped: self-absorption diagnostic failed ({exc})",
+                )
+                log(f"WARNING: Self-absorption diagnostic failed for {output_base}: {exc}")
+            self_absorption_results.append(result)
+            if result.status == "flagged":
+                warnings.append(
+                    f"Possible self-absorption: {output_base} "
+                    f"(ratio={result.ratio_fluo_over_trans:.3f}, "
+                    f"threshold={result.threshold_used:.2f}, severity={result.severity})"
+                )
+            if (
+                getattr(config, "save_self_absorption_qc_plots", True)
+                and result.status in {"ok", "flagged"}
+                and result.fluo_norm is not None
+                and result.trans_norm is not None
+            ):
+                try:
+                    path = plot_self_absorption_qc(
+                        result,
+                        master_energy,
+                        result.fluo_norm,
+                        result.trans_norm,
+                        replicate_qc_dir / f"{output_base}_self_absorption_qc.png",
+                    )
+                    if path is not None:
+                        plot_files.append(path)
+                        log(f"Saving self-absorption QC plot: {output_base}")
+                except Exception as exc:
+                    warning = f"Could not save self-absorption QC plot for {output_base}: {exc}"
+                    warnings.append(warning)
+                    log("WARNING: " + warning)
 
         if getattr(config, "save_processed_mu_replicate_qc_plot", True):
             if len(processed_array) > 1:
@@ -2272,6 +2444,29 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
                         replaced_str = " ".join(f"{e:.6f}" for e in rec["replaced_energies_manual"])
                         f.write(f"{rec['filename']}\tmanual_range_interpolate\t{rec['n_replaced_manual']}\t{replaced_str}\n")
 
+    self_absorption_path = output_dir / "ASTRA_self_absorption_flags.dat"
+    if self_absorption_should_run:
+        try:
+            path = write_self_absorption_flags(self_absorption_results, output_dir, config)
+            self_absorption_summary.update({
+                "path": path,
+                "checked": sum(1 for result in self_absorption_results if result.status in {"ok", "flagged"}),
+                "flagged": sum(1 for result in self_absorption_results if result.status == "flagged"),
+                "skipped": sum(1 for result in self_absorption_results if result.status == "skipped"),
+            })
+            log(f"Saved self-absorption diagnostic: {path}")
+        except Exception as exc:
+            warning = f"Self-absorption diagnostic output failed: {exc}"
+            warnings.append(warning)
+            self_absorption_summary["reason"] = f"output failed: {exc}"
+            log("WARNING: " + warning)
+    else:
+        try:
+            if self_absorption_path.exists():
+                self_absorption_path.unlink()
+        except Exception:
+            pass
+
     if plots_enabled:
         log(f"Generating plots in: {plots_dir}")
 
@@ -2360,6 +2555,8 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
                 "processing_warnings": warnings,
                 "detector_jump_diagnostic": detector_jump_diagnostic,
                 "all_jump_records": all_jump_records,
+                "self_absorption_summary": self_absorption_summary,
+                "self_absorption_results": self_absorption_results,
                 "low_quality_count": low_quality_count,
                 "total_auto_deglitched_points": total_auto_deglitched_points,
                 "total_manual_range_interpolated_points": total_manual_range_interpolated_points,
@@ -2472,6 +2669,34 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
                 "    norm window:      "
                 f"{sum(1 for record in summary_records if record.get('inside_norm_window'))}\n"
             )
+        f.write("\nSelf-absorption diagnostic:\n")
+        f.write(
+            "This is a heuristic diagnostic. It flags likely fluorescence self-absorption when "
+            "the fluorescence white-line amplitude is suppressed relative to the simultaneously "
+            "available sample transmission signal. It does not correct the spectrum and should "
+            "not be treated as proof of self-absorption.\n"
+        )
+        if self_absorption_summary["enabled"]:
+            f.write("Self-absorption diagnostic enabled: yes\n")
+            f.write(f"Sensitivity: {self_absorption_summary['sensitivity']}\n")
+            f.write(f"Threshold: {self_absorption_summary['threshold']:.4f}\n")
+            f.write(f"Groups checked: {self_absorption_summary['checked']}\n")
+            f.write(f"Groups flagged: {self_absorption_summary['flagged']}\n")
+            f.write(f"Groups skipped: {self_absorption_summary['skipped']}\n")
+            if self_absorption_summary.get("path") is not None:
+                f.write(f"Output file: {_relative_output_path(self_absorption_summary['path'], output_dir)}\n")
+            flagged = [result for result in self_absorption_results if result.status == "flagged"]
+            if flagged:
+                f.write("Flagged groups:\n")
+                for result in flagged:
+                    f.write(
+                        f"- {result.sample}: ratio={result.ratio_fluo_over_trans:.4f}, "
+                        f"threshold={result.threshold_used:.4f}, severity={result.severity}\n"
+                    )
+        elif getattr(config, "analysis_mode", "fluo") != "fluo":
+            f.write("Self-absorption diagnostic disabled because analysis mode is not fluorescence.\n")
+        else:
+            f.write("Self-absorption diagnostic disabled by user.\n")
         f.write("\n")
         f.write(f"Auto-deglitched points: {total_auto_deglitched_points}\n")
         f.write(f"Manually range-interpolated points: {total_manual_range_interpolated_points}\n")
@@ -2577,4 +2802,5 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
         "auto_deglitched_points": total_auto_deglitched_points,
         "manual_range_interpolated_points": total_manual_range_interpolated_points,
         "pdf_report": pdf_report_status["path"] if pdf_report_status["status"] == "created" else None,
+        "self_absorption": self_absorption_summary,
     }

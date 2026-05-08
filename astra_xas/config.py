@@ -56,6 +56,15 @@ class AstraConfig:
     enable_detector_jump_warnings: bool = True
     detector_jump_threshold: float = 10.0
     detector_jump_min_relative: float = 0.05
+    enable_self_absorption_check: bool = True
+    self_absorption_sensitivity: str = "normal"
+    self_absorption_custom_threshold: float = 0.85
+    self_absorption_wl_min: float = 0.0
+    self_absorption_wl_max: float = 35.0
+    self_absorption_cont_min: float = 50.0
+    self_absorption_cont_max: float = 150.0
+    self_absorption_min_trans_amp: float = 0.03
+    self_absorption_min_points: int = 5
 
     # Automatic plots. Avoid using "raw" for processed μ(E); true raw detector channels are separate.
     save_detector_health_overview_plot: bool = True
@@ -70,6 +79,7 @@ class AstraConfig:
     save_drift_plot: bool = False
     save_foil_alignment_plots: bool = False
     save_pdf_report: bool = True
+    save_self_absorption_qc_plots: bool = True
 
     plot_energy_min: float = 7100.0
     plot_energy_max: float = 7160.0

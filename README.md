@@ -317,8 +317,10 @@ For each sample group, AstraXAS writes the following to the output directory:
 | `plots/overview/background_corrected_overview.png` | All background-corrected spectra overlaid |
 | `plots/overview/normalized_overview.png` | All normalized spectra overlaid |
 | `plots/overview/drift_tracker.png` | Optional scan-by-scan energy shift plot, written when `save_drift_plot=True` |
+| `plots/replicate_qc/<sample>_self_absorption_qc.png` | Optional fluorescence self-absorption diagnostic plot |
 | `<sample>_deglitch_log.dat` | Deglitch point log, written only when deglitching modifies points |
 | `ASTRA_detector_jumps.dat` | Diagnostic detector jump records, written only when jump-like spikes are detected |
+| `ASTRA_self_absorption_flags.dat` | Fluorescence-mode heuristic possible self-absorption flags, written when the check is enabled |
 | `ASTRA_processing_report.txt` | Full parameter log, validation warnings, processing warnings, plot file lists, replicate QC counts, per-group summary, low-quality alignment count, and deglitch point counts |
 | `ASTRA_energy_shifts.dat` | Per-sample shift table with alignment-anchor metadata: filename, base name, replicate id, assigned foil/reference, shift, alignment quality |
 | `ASTRA_foil_alignment.dat` | Per-foil or inline-reference alignment table with alignment-anchor metadata: filename, shift, fit error, alignment quality |
@@ -378,6 +380,18 @@ The built-in Spectrum Viewer can open any `.dat` file produced by AstraXAS — i
 
 ---
 
+## Self-Absorption Diagnostic
+
+In fluorescence mode, AstraXAS can optionally flag possible fluorescence self-absorption / over-absorption when sample transmission channels are available. The diagnostic compares the normalized white-line amplitude of the processed fluorescence signal against the normalized white-line amplitude of the simultaneously measured sample transmission signal, `ln(I0/I1)`.
+
+This is a heuristic warning only. It does not correct spectra, does not modify the final fluorescence output, and should not be treated as proof that self-absorption is confirmed. Flagged spectra should be inspected by the user.
+
+When enabled, fluorescence-mode runs write `ASTRA_self_absorption_flags.dat`. Checked groups can also produce `plots/replicate_qc/<sample>_self_absorption_qc.png`, showing the normalized diagnostic fluorescence and transmission spectra with the white-line and continuum windows marked. In transmission or reference analysis mode, the diagnostic is disabled and no self-absorption flag file is created.
+
+The sensitivity options are `relaxed`, `normal`, `strict`, and `custom`. The relevant fields remain editable in the GUI and saved config.
+
+---
+
 ## Configuration
 
 All processing parameters are exposed in the GUI and saveable as JSON config files. Common parameters:
@@ -414,6 +428,14 @@ All processing parameters are exposed in the GUI and saveable as JSON config fil
 | `enable_detector_jump_warnings` | Run diagnostic-only raw detector jump warnings; default `True` |
 | `detector_jump_threshold` | Point-to-point MAD multiplier for detector jump warnings; default `10.0` |
 | `detector_jump_min_relative` | Minimum relative jump size for detector jump warnings; default `0.05` |
+| `enable_self_absorption_check` | Enable fluorescence-only possible self-absorption warning; default `True` |
+| `self_absorption_sensitivity` | Flag threshold preset: `relaxed`, `normal`, `strict`, or `custom` |
+| `self_absorption_custom_threshold` | Custom fluorescence/transmission white-line amplitude ratio threshold |
+| `self_absorption_wl_min/max` | White-line diagnostic window relative to E0 |
+| `self_absorption_cont_min/max` | Continuum diagnostic window relative to E0 |
+| `self_absorption_min_trans_amp` | Minimum reliable transmission white-line amplitude |
+| `self_absorption_min_points` | Minimum finite points required in diagnostic windows |
+| `save_self_absorption_qc_plots` | Save `plots/replicate_qc/<sample>_self_absorption_qc.png`; default `True` |
 | `save_detector_health_overview_plot` | Save `plots/overview/detector_health_overview.png`; default `True` |
 | `save_analysis_signal_qc_plot` | Save `plots/overview/analysis_signal_qc.png`; default `True` |
 | `save_detector_raw_overview_plot` | Save `plots/overview/aligned_averaged_IF_overview.png`; legacy config name retained for compatibility |

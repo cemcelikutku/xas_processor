@@ -62,6 +62,16 @@ class AstraGui(tk.Tk):
         self.alignment_grid_points = tk.StringVar(value="50")
         self.save_drift_plot = tk.BooleanVar(value=False)
         self.enable_detector_jump_warnings = tk.BooleanVar(value=True)
+        self.enable_self_absorption_check = tk.BooleanVar(value=True)
+        self.self_absorption_sensitivity = tk.StringVar(value="normal")
+        self.self_absorption_custom_threshold = tk.StringVar(value="0.85")
+        self.self_absorption_wl_min = tk.StringVar(value="0.0")
+        self.self_absorption_wl_max = tk.StringVar(value="35.0")
+        self.self_absorption_cont_min = tk.StringVar(value="50.0")
+        self.self_absorption_cont_max = tk.StringVar(value="150.0")
+        self.self_absorption_min_trans_amp = tk.StringVar(value="0.03")
+        self.self_absorption_min_points = tk.StringVar(value="5")
+        self.save_self_absorption_qc_plots = tk.BooleanVar(value=True)
         self.fluo_factor = tk.StringVar(value="1e-11")
         self.enable_deglitching = tk.BooleanVar(value=False)
         self.deglitch_mode = tk.StringVar(value="automatic")
@@ -184,6 +194,7 @@ class AstraGui(tk.Tk):
         self._build_basic_section(left)
         self._build_advanced_section(left)
         self._build_deglitch_section(left)
+        self._build_self_absorption_section(left)
         self._build_plot_section(left)
         self._build_buttons(left)
         self._build_log_section(right)
@@ -445,6 +456,75 @@ class AstraGui(tk.Tk):
             row=8, column=1, sticky="w", padx=6, pady=3
         )
         self._manual_deglitch_widgets.extend([margin_label, margin_entry])
+
+    def _build_self_absorption_section(self, parent):
+        frame = ttk.LabelFrame(
+            parent,
+            text="3b. Self-absorption diagnostic",
+            padding=10,
+            style="Section.TLabelframe",
+        )
+        frame.pack(fill="x", pady=(0, 10))
+        frame.columnconfigure(1, weight=1)
+        frame.columnconfigure(3, weight=1)
+
+        ttk.Checkbutton(
+            frame,
+            text="Enable self-absorption flag",
+            variable=self.enable_self_absorption_check,
+        ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 6))
+
+        ttk.Label(frame, text="Sensitivity").grid(row=1, column=0, sticky="w", pady=3)
+        ttk.Combobox(
+            frame,
+            textvariable=self.self_absorption_sensitivity,
+            values=("relaxed", "normal", "strict", "custom"),
+            width=12,
+            state="readonly",
+        ).grid(row=1, column=1, sticky="w", padx=6, pady=3)
+        ttk.Label(frame, text="Custom threshold").grid(row=1, column=2, sticky="w", padx=(10, 0), pady=3)
+        ttk.Entry(frame, textvariable=self.self_absorption_custom_threshold, width=14).grid(
+            row=1, column=3, sticky="w", padx=6, pady=3
+        )
+
+        ttk.Label(frame, text="White-line window rel. E0").grid(row=2, column=0, sticky="w", pady=3)
+        ttk.Entry(frame, textvariable=self.self_absorption_wl_min, width=14).grid(
+            row=2, column=1, sticky="w", padx=6, pady=3
+        )
+        ttk.Label(frame, text="to").grid(row=2, column=2, sticky="w", padx=(10, 0), pady=3)
+        ttk.Entry(frame, textvariable=self.self_absorption_wl_max, width=14).grid(
+            row=2, column=3, sticky="w", padx=6, pady=3
+        )
+
+        ttk.Label(frame, text="Continuum window rel. E0").grid(row=3, column=0, sticky="w", pady=3)
+        ttk.Entry(frame, textvariable=self.self_absorption_cont_min, width=14).grid(
+            row=3, column=1, sticky="w", padx=6, pady=3
+        )
+        ttk.Label(frame, text="to").grid(row=3, column=2, sticky="w", padx=(10, 0), pady=3)
+        ttk.Entry(frame, textvariable=self.self_absorption_cont_max, width=14).grid(
+            row=3, column=3, sticky="w", padx=6, pady=3
+        )
+
+        ttk.Label(frame, text="Min transmission WL amplitude").grid(row=4, column=0, sticky="w", pady=3)
+        ttk.Entry(frame, textvariable=self.self_absorption_min_trans_amp, width=14).grid(
+            row=4, column=1, sticky="w", padx=6, pady=3
+        )
+        ttk.Label(frame, text="Min points").grid(row=4, column=2, sticky="w", padx=(10, 0), pady=3)
+        ttk.Entry(frame, textvariable=self.self_absorption_min_points, width=14).grid(
+            row=4, column=3, sticky="w", padx=6, pady=3
+        )
+
+        ttk.Checkbutton(
+            frame,
+            text="Save self-absorption QC plots",
+            variable=self.save_self_absorption_qc_plots,
+        ).grid(row=5, column=0, columnspan=4, sticky="w", pady=(5, 0))
+
+        ttk.Label(
+            frame,
+            text="Heuristic fluorescence-only warning. It does not correct spectra.",
+            wraplength=430,
+        ).grid(row=6, column=0, columnspan=4, sticky="w", pady=(6, 0))
 
     def _build_plot_section(self, parent):
         frame = ttk.LabelFrame(parent, text="4. Automatic plots", padding=10, style="Section.TLabelframe")
@@ -757,6 +837,19 @@ class AstraGui(tk.Tk):
             "alignment grid points",
             self.alignment_grid_points,
         )
+        self_absorption_custom_threshold = self._float(
+            "self-absorption custom threshold",
+            self.self_absorption_custom_threshold,
+        )
+        self_absorption_wl_min = self._float("self-absorption white-line min", self.self_absorption_wl_min)
+        self_absorption_wl_max = self._float("self-absorption white-line max", self.self_absorption_wl_max)
+        self_absorption_cont_min = self._float("self-absorption continuum min", self.self_absorption_cont_min)
+        self_absorption_cont_max = self._float("self-absorption continuum max", self.self_absorption_cont_max)
+        self_absorption_min_trans_amp = self._float(
+            "self-absorption minimum transmission white-line amplitude",
+            self.self_absorption_min_trans_amp,
+        )
+        self_absorption_min_points = self._int("self-absorption minimum points", self.self_absorption_min_points)
 
         if align_min >= align_max:
             raise ValueError("align min must be smaller than align max.")
@@ -778,6 +871,14 @@ class AstraGui(tk.Tk):
             raise ValueError("Alignment grid points must be at least 5.")
         if not (0.0 <= alignment_quality_warn_threshold <= 1.0):
             raise ValueError("Alignment quality warn threshold must be between 0.0 and 1.0.")
+        if self_absorption_wl_min >= self_absorption_wl_max:
+            raise ValueError("Self-absorption white-line window min must be smaller than max.")
+        if self_absorption_cont_min >= self_absorption_cont_max:
+            raise ValueError("Self-absorption continuum window min must be smaller than max.")
+        if self_absorption_min_trans_amp < 0:
+            raise ValueError("Self-absorption minimum transmission amplitude must be non-negative.")
+        if self_absorption_min_points < 1:
+            raise ValueError("Self-absorption minimum points must be at least 1.")
 
         auto_deglitch_enabled, manual_deglitch_enabled = self._deglitch_enable_flags()
         self.enable_auto_deglitch.set(auto_deglitch_enabled)
@@ -818,6 +919,16 @@ class AstraGui(tk.Tk):
             manual_deglitch_max_energy=manual_deglitch_max_energy,
             manual_deglitch_margin_points=manual_deglitch_margin_points,
             enable_detector_jump_warnings=self.enable_detector_jump_warnings.get(),
+            enable_self_absorption_check=self.enable_self_absorption_check.get(),
+            self_absorption_sensitivity=self.self_absorption_sensitivity.get(),
+            self_absorption_custom_threshold=self_absorption_custom_threshold,
+            self_absorption_wl_min=self_absorption_wl_min,
+            self_absorption_wl_max=self_absorption_wl_max,
+            self_absorption_cont_min=self_absorption_cont_min,
+            self_absorption_cont_max=self_absorption_cont_max,
+            self_absorption_min_trans_amp=self_absorption_min_trans_amp,
+            self_absorption_min_points=self_absorption_min_points,
+            save_self_absorption_qc_plots=self.save_self_absorption_qc_plots.get(),
             save_detector_health_overview_plot=self.plot_detector_health_overview.get(),
             save_analysis_signal_qc_plot=self.plot_analysis_signal_qc.get(),
             save_detector_raw_overview_plot=self.plot_detector_raw_overview.get(),
@@ -873,6 +984,16 @@ class AstraGui(tk.Tk):
             "manual_deglitch_max_energy": c.manual_deglitch_max_energy,
             "manual_deglitch_margin_points": c.manual_deglitch_margin_points,
             "enable_detector_jump_warnings": c.enable_detector_jump_warnings,
+            "enable_self_absorption_check": c.enable_self_absorption_check,
+            "self_absorption_sensitivity": c.self_absorption_sensitivity,
+            "self_absorption_custom_threshold": c.self_absorption_custom_threshold,
+            "self_absorption_wl_min": c.self_absorption_wl_min,
+            "self_absorption_wl_max": c.self_absorption_wl_max,
+            "self_absorption_cont_min": c.self_absorption_cont_min,
+            "self_absorption_cont_max": c.self_absorption_cont_max,
+            "self_absorption_min_trans_amp": c.self_absorption_min_trans_amp,
+            "self_absorption_min_points": c.self_absorption_min_points,
+            "save_self_absorption_qc_plots": c.save_self_absorption_qc_plots,
             "save_detector_health_overview_plot": getattr(c, "save_detector_health_overview_plot", True),
             "save_analysis_signal_qc_plot": getattr(c, "save_analysis_signal_qc_plot", True),
             "save_detector_raw_overview_plot": getattr(c, "save_detector_raw_overview_plot", False),
@@ -924,6 +1045,16 @@ class AstraGui(tk.Tk):
             "manual_deglitch_max_energy": self.manual_deglitch_max_energy,
             "manual_deglitch_margin_points": self.manual_deglitch_margin_points,
             "enable_detector_jump_warnings": self.enable_detector_jump_warnings,
+            "enable_self_absorption_check": self.enable_self_absorption_check,
+            "self_absorption_sensitivity": self.self_absorption_sensitivity,
+            "self_absorption_custom_threshold": self.self_absorption_custom_threshold,
+            "self_absorption_wl_min": self.self_absorption_wl_min,
+            "self_absorption_wl_max": self.self_absorption_wl_max,
+            "self_absorption_cont_min": self.self_absorption_cont_min,
+            "self_absorption_cont_max": self.self_absorption_cont_max,
+            "self_absorption_min_trans_amp": self.self_absorption_min_trans_amp,
+            "self_absorption_min_points": self.self_absorption_min_points,
+            "save_self_absorption_qc_plots": self.save_self_absorption_qc_plots,
             "save_detector_health_overview_plot": self.plot_detector_health_overview,
             "save_analysis_signal_qc_plot": self.plot_analysis_signal_qc,
             "save_detector_raw_overview_plot": self.plot_detector_raw_overview,
