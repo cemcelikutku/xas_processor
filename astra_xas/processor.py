@@ -24,7 +24,9 @@ SHIFT_CONVENTION = (
     "positive shift_eV means +shift_eV is added to the scan energy before "
     "interpolation/averaging; shifts are relative to the alignment anchor."
 )
-RAW_DETECTOR_JUMP_CHANNELS = {"I0", "I1", "I2", "IF", "FDT"}
+PRIMARY_DETECTOR_JUMP_CHANNELS = {"I0", "I1", "I2", "IF"}
+FDT_DETECTOR_JUMP_CHANNELS = {"FDT"}
+RAW_DETECTOR_JUMP_CHANNELS = PRIMARY_DETECTOR_JUMP_CHANNELS | FDT_DETECTOR_JUMP_CHANNELS
 DERIVED_DETECTOR_JUMP_CHANNELS = {"IF_over_I0", "ln_I0_I1", "ln_I1_I2"}
 
 
@@ -421,16 +423,15 @@ def _annotate_detector_jump_summary_inclusion(records: list[dict]) -> None:
         if channel in DERIVED_DETECTOR_JUMP_CHANNELS:
             include = False
             reasons.append("excluded from main summary: derived signal")
+        elif channel in FDT_DETECTOR_JUMP_CHANNELS:
+            include = False
+            reasons.append("reported separately as FDT diagnostic spike")
         elif channel not in RAW_DETECTOR_JUMP_CHANNELS:
             include = False
             reasons.append("excluded from main summary: non-standard channel")
 
-        if include and channel == "FDT" and severity == "low":
-            include = False
-            reasons.append("excluded from main summary: low-severity FDT diagnostic")
-
         if include and inside_alignment:
-            include = severity == "high" and channel != "FDT" and relative_jump >= 0.5
+            include = severity == "high" and relative_jump >= 0.5
             if not include:
                 reasons.append("excluded from main summary: edge/alignment window")
 
@@ -455,7 +456,7 @@ def _write_detector_jumps(path: Path, records: list[dict], config: AstraConfig) 
         f.write(f"# Threshold multiplier: {threshold}\n")
         f.write(f"# Min relative jump: {_config_float(config, 'detector_jump_min_relative', 0.05)}\n")
         f.write("# Spike vs step discrimination: recovery window = 5 points\n")
-        f.write("# include_in_summary: True only for significant raw-channel jumps emphasized in ASTRA_processing_report.txt\n")
+        f.write("# include_in_summary: True only for significant primary raw-channel jumps emphasized in ASTRA_processing_report.txt\n")
         f.write("# NOTE: This file is diagnostic only. No data was modified.\n")
         f.write("#\n")
         f.write(
@@ -1095,6 +1096,8 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
     if _config_bool(config, "enable_detector_jump_warnings", True):
         try:
             for scan in entries:
+                if scan.get("is_foil"):
+                    continue
                 shifted_energy = np.asarray(scan.get("energy"), dtype=float) + float(scan.get("energy_shift_eV", 0.0))
                 raw_channels_to_check = {
                     "I0": scan.get("I0"),
@@ -1660,31 +1663,32 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
             severity_counts = {"high": 0, "medium": 0, "low": 0}
             derived_count = 0
             edge_alignment_excluded = 0
-            fdt_excluded = 0
+            fdt_count = 0
             for record in all_jump_records:
                 channel = record.get("channel", "unknown")
                 if channel in DERIVED_DETECTOR_JUMP_CHANNELS:
                     derived_count += 1
-                if record.get("inside_alignment_window") and not record.get("include_in_summary"):
+                elif channel in FDT_DETECTOR_JUMP_CHANNELS:
+                    fdt_count += 1
+                elif record.get("inside_alignment_window") and not record.get("include_in_summary"):
                     edge_alignment_excluded += 1
-                if channel == "FDT" and not record.get("include_in_summary"):
-                    fdt_excluded += 1
             for record in summary_records:
                 channel = record.get("channel", "unknown")
                 channel_counts[channel] = channel_counts.get(channel, 0) + 1
                 severity = record.get("severity", "low")
                 severity_counts[severity] = severity_counts.get(severity, 0) + 1
             f.write(
-                "  Significant raw-channel jumps outside edge/alignment window: "
+                "  Significant primary raw-channel jumps outside edge/alignment window: "
                 f"{len(summary_records)}\n"
             )
+            f.write(f"  FDT diagnostic spikes: {fdt_count} entries, reported separately\n")
             f.write(f"  Full diagnostic entries: {len(all_jump_records)}\n")
             f.write("  Full diagnostic entries written to: ASTRA_detector_jumps.dat\n")
             f.write(
                 "  Entries excluded from main summary: "
                 f"derived-signal features={derived_count}; "
                 f"edge/alignment-window features={edge_alignment_excluded}; "
-                f"low-severity/noisy FDT features={fdt_excluded}\n"
+                f"FDT diagnostic spikes={fdt_count}\n"
             )
             f.write("  Main affected channels:\n")
             if channel_counts:
