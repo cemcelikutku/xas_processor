@@ -17,8 +17,13 @@ AstraXAS provides automated workflows for X-ray absorption spectroscopy (XAS) pr
 - **Pre-merge deglitching** — optional automatic interpolation of narrow detector spikes and manual range interpolation for broader inspected artifacts
 - **Automatic outlier detection** — optionally flag and exclude replicates that deviate from the group mean by a configurable RMS threshold
 - **Shift rejection** — optionally exclude replicates whose energy shift exceeds a threshold before merging
+- **Validation warnings** — reports missing/weak channels, incompatible modes, and energy-window issues before processing decisions are made
+- **Detector jump diagnostics** — optional diagnostic-only raw detector spike reporting with a structured `ASTRA_detector_jumps.dat` file
+- **Self-absorption flag** — optional fluorescence-mode heuristic that flags likely self-absorption when the fluorescence white-line amplitude is suppressed relative to simultaneously available sample transmission; QC flag only, no correction
 - **Detector raw export** — saves all raw detector channels (I0, I1, I2, IF, FDT, Ir) alongside processed outputs, plottable directly in the Spectrum Viewer
 - **Automatic plots** — detector health overview, analysis signal QC, processed μ(E), background-corrected, and normalized overview plots; pre-normalization and normalized replicate QC plots; optional energy drift tracker
+- **Edge presets** — editable starting templates for common ASTRA-accessible edges
+- **PDF QC report** — optional single-file processing and quality-control report generated from existing outputs
 - **Interactive Spectrum Viewer** — compare any `.dat` files side by side with Savitzky-Golay smoothing, raw/smoothed overlay, legend toggling, click-to-read energy values, and publication-ready figure export
 - **JSON config system** — save and load processing parameters per edge or experiment type
 - **CLI and Python API** — run headless from the command line or call `process_folder()` from a script
@@ -76,7 +81,8 @@ Options:
 
 | Flag | Default | Description |
 |---|---|---|
-| `-o / --output-dir` | `<input>-processed` | Output folder |
+| `input_dir` | required | Folder containing `.xasd` files |
+| `-o`, `--output-dir` | `<input>-processed` | Output folder |
 | `--mode` | `fluo` | Sample signal: `fluo`, `trans`, or `ref` |
 | `--foil-mode` | `trans` | Foil alignment signal: `trans`, `ref`, or `fluo` |
 | `--e0` | `7121.030` | Edge energy in eV |
@@ -112,27 +118,31 @@ print(result["output_dir"])
 .xasd files
     │
     ├─ Load detector channels (E, I0, I1, I2, IF, FDT, Ir)
-    ├─ Compute μ(E) per scan (IF/I0, ln(I0/I1), or ln(I1/I2))
+    ├─ Run validation warnings on channels, modes, and energy windows
     ├─ Align each scan to foil reference via derivative-shape matching
     ├─ Score alignment quality and record energy drift
+    ├─ [Optional] Reject scans with large alignment shifts
+    ├─ [Optional] Run detector jump diagnostics on raw channels
+    ├─ Compute μ(E) per scan (IF/I0, ln(I0/I1), or ln(I1/I2))
     ├─ [Optional] Deglitch aligned replicates before merging
-    ├─ [Optional] Reject outlier replicates
+    ├─ [Optional] Reject outlier replicates inside each group
     │
     ├─ Average aligned μ(E) replicates  ← merge first
     ├─ Run Larch pre_edge on merged spectrum  ← normalize once
+    ├─ [Optional] Self-absorption flag (fluorescence mode only)
     │
     └─ Output
          ├─ <sample>_processed.dat   (merged processed μ(E))
          ├─ <sample>_bkgcorr.dat     (background-subtracted)
          ├─ <sample>_norm.dat        (normalized μ(E))
          ├─ <sample>_flat.dat        (flattened normalized μ(E))
-         ├─ detector_raw/<scan>.dat  (all detector channels)
+         ├─ detector_raw/<scan>_detector_raw.dat  (all detector channels)
          ├─ plots/overview/          (dataset-level overview and QC plots)
          ├─ plots/replicate_qc/      (scan-to-scan replicate QC plots)
          ├─ ASTRA_energy_shifts.dat
          ├─ ASTRA_foil_alignment.dat
          ├─ ASTRA_processing_report.txt
-         └─ ASTRA_processing_and_QC_report.pdf
+         └─ [Optional] ASTRA_processing_and_QC_report.pdf
 ```
 
 ---
@@ -230,6 +240,56 @@ This check uses point-to-point MAD thresholding plus recovery-window spike-vs-st
 
 ---
 
+## Self-absorption diagnostic
+
+When `analysis_mode="fluo"` and `enable_self_absorption_check=True`, AstraXAS can flag possible fluorescence self-absorption / over-absorption. The diagnostic compares the normalized white-line amplitude of the fluorescence signal against the normalized white-line amplitude of the simultaneously available sample transmission signal, `ln(I0/I1)`, and flags groups where the fluorescence white-line amplitude is suppressed.
+
+This is a heuristic QC flag, not a correction. It does not modify processed spectra, normalized spectra, alignment, averaging, deglitching, or exported spectral values. The ratio can also be influenced by sample geometry, detector effects, noise, normalization quality, and chemical or sampling differences, so flagged groups should be inspected by the user.
+
+The diagnostic runs only for fluorescence-mode sample groups and only uses accepted scans: scans that survive manual exclusions, optional shift rejection, and group-level outlier filtering. The diagnostic transmission average is built from the same accepted scans as the final fluorescence average. If usable `I0`/`I1` transmission data are not available, or if diagnostic normalization cannot be evaluated reliably, the group is marked `skipped`.
+
+Sensitivity controls the fluorescence/transmission white-line amplitude ratio threshold:
+
+| Sensitivity | Threshold |
+|---|---:|
+| `relaxed` | `0.75` |
+| `normal` | `0.85` |
+| `strict` | `0.92` |
+| `custom` | `self_absorption_custom_threshold` |
+
+Classification is based on `ratio_fluo_over_trans = fluo_white_line_amplitude / trans_white_line_amplitude`. Ratios greater than or equal to the selected threshold are `ok`; ratios below the threshold are `flagged`; invalid or insufficient diagnostics are `skipped`. Flag severity uses absolute ratio bands independent of the selected sensitivity: `mild` for ratios `>= 0.75`, `moderate` for ratios `>= 0.60`, and `strong` below `0.60`.
+
+White-line and continuum windows are anchored to `config.e0`. Defaults are:
+
+| Window | Default offset relative to E₀ |
+|---|---|
+| White-line | `0.0` to `35.0` eV |
+| Continuum | `50.0` to `150.0` eV |
+
+The normalized diagnostic spectra are measured using a smoothed 95th percentile in the white-line window minus the median continuum level. If the continuum window is unavailable but the white-line window is usable, AstraXAS falls back to a continuum level of `1.0` and records that note. The default minimum transmission white-line amplitude is `0.03`, and the default minimum number of finite points in a diagnostic window is `5`.
+
+When the diagnostic runs, AstraXAS writes `ASTRA_self_absorption_flags.dat` even if every group is skipped. If the analysis mode is not fluorescence, or if `enable_self_absorption_check=False`, this file is not created. The table columns are:
+
+```text
+sample  status  severity  ratio_fluo_over_trans  fluo_white_line_amplitude
+trans_white_line_amplitude  threshold_used  sensitivity  white_line_window_eV
+continuum_window_eV  n_replicates_used  note
+```
+
+Rows with `status=ok` include measured amplitudes and an `OK` note. Rows with `status=flagged` include the ratio, threshold, severity, and a note that the fluorescence white-line amplitude is suppressed relative to transmission. Rows with `status=skipped` use `nan` where amplitudes or ratios are unavailable and include a clear skip reason.
+
+When `save_self_absorption_qc_plots=True`, checked groups with `status=ok` or `status=flagged` also write:
+
+```text
+plots/replicate_qc/<sample>_self_absorption_qc.png
+```
+
+The QC plot overlays the normalized fluorescence diagnostic spectrum and normalized sample transmission diagnostic spectrum, with the white-line and continuum windows marked. Flagged groups are also added to the standard `Processing warnings` list and summarized in both `ASTRA_processing_report.txt` and `ASTRA_processing_and_QC_report.pdf`.
+
+The GUI exposes this feature in the self-absorption diagnostic section, including enable/disable, sensitivity, custom threshold, white-line and continuum offsets, minimum transmission amplitude, minimum points, and QC plot saving.
+
+---
+
 ## Deglitching
 
 AstraXAS includes optional deglitching for scan-level artifacts. Deglitching operates on each aligned replicate before replicate averaging. The merge-then-normalize workflow is preserved: corrected μ(E) replicates are merged first, and Larch `pre_edge` normalization is applied once to the merged spectrum.
@@ -307,9 +367,10 @@ For each sample group, AstraXAS writes the following to the output directory:
 | `<sample>_bkgcorr.dat` | Background-corrected μ(E) |
 | `<sample>_norm.dat` | Normalized μ(E) |
 | `<sample>_flat.dat` | Flattened normalized μ(E) |
-| `detector_raw/<scan>.dat` | Raw detector channels for every individual scan |
+| `detector_raw/<scan>_detector_raw.dat` | Raw detector channels for every individual scan |
 | `plots/replicate_qc/<sample>_normalized_replicate_qc.png` | Normalized replicate overlay QC plot |
 | `plots/replicate_qc/<sample>_processed_mu_replicate_qc.png` | Pre-normalization processed μ(E) replicate QC plot |
+| `plots/replicate_qc/<sample>_self_absorption_qc.png` | Optional fluorescence self-absorption QC plot for checked groups when `save_self_absorption_qc_plots=True` |
 | `plots/overview/detector_health_overview.png` | Mode-aware stacked detector QC plot using individual sample scan traces |
 | `plots/overview/analysis_signal_qc.png` | Mode-aware per-scan analysis signal before final normalization, with optional average overlay |
 | `plots/overview/aligned_averaged_IF_overview.png` | Optional aligned/interpolated/averaged IF detector signal by group |
@@ -317,22 +378,24 @@ For each sample group, AstraXAS writes the following to the output directory:
 | `plots/overview/background_corrected_overview.png` | All background-corrected spectra overlaid |
 | `plots/overview/normalized_overview.png` | All normalized spectra overlaid |
 | `plots/overview/drift_tracker.png` | Optional scan-by-scan energy shift plot, written when `save_drift_plot=True` |
-| `plots/replicate_qc/<sample>_self_absorption_qc.png` | Optional fluorescence self-absorption diagnostic plot |
 | `<sample>_deglitch_log.dat` | Deglitch point log, written only when deglitching modifies points |
 | `ASTRA_detector_jumps.dat` | Diagnostic detector jump records, written only when jump-like spikes are detected |
-| `ASTRA_self_absorption_flags.dat` | Fluorescence-mode heuristic possible self-absorption flags, written when the check is enabled |
+| `ASTRA_self_absorption_flags.dat` | Fluorescence-mode possible self-absorption diagnostic table, written when `analysis_mode="fluo"` and `enable_self_absorption_check=True` |
+| `ASTRA_excluded_scans.dat` | Manually excluded scans and exclusion reasons |
+| `ASTRA_auto_rejected_scans.dat` | Scans rejected by optional shift rejection |
+| `ASTRA_auto_outliers.dat` | Replicates rejected by optional group-level outlier detection |
 | `ASTRA_processing_report.txt` | Full parameter log, validation warnings, processing warnings, plot file lists, replicate QC counts, per-group summary, low-quality alignment count, and deglitch point counts |
 | `ASTRA_energy_shifts.dat` | Per-sample shift table with alignment-anchor metadata: filename, base name, replicate id, assigned foil/reference, shift, alignment quality |
 | `ASTRA_foil_alignment.dat` | Per-foil or inline-reference alignment table with alignment-anchor metadata: filename, shift, fit error, alignment quality |
 | `ASTRA_normalization_summary.dat` | Edge step, E₀, and normalization metadata per group |
-| `ASTRA_group_summary.dat` | Sample names, foil assignments, replicate counts |
+| `ASTRA_group_summary.dat` | Sample names, foil assignments, replicate counts, and detector-jump summary counts |
 | `ASTRA_processing_and_QC_report.pdf` | Optional single-file processing and QC report with metadata, QC status, warnings, summary tables, and generated QC plots |
 
 All `.dat` files have a commented header listing parameters and column names, and spectral `.dat` files are directly loadable in the Spectrum Viewer. `ASTRA_energy_shifts.dat` and `ASTRA_foil_alignment.dat` include the alignment anchor context so shifts can be interpreted across folders.
 
-`ASTRA_processing_report.txt` separates `Validation warnings` from `Processing warnings`, reports processed μ(E) replicate QC and normalized replicate QC counts separately, and lists created plots under `Overview plots created` and `Replicate QC plots created`.
+`ASTRA_processing_report.txt` separates `Validation warnings` from `Processing warnings`, summarizes detector jump and self-absorption diagnostics, reports processed μ(E) replicate QC and normalized replicate QC counts separately, and lists created plots under `Overview plots created` and `Replicate QC plots created`.
 
-When `save_pdf_report=True`, AstraXAS also writes `ASTRA_processing_and_QC_report.pdf`. The PDF collects run metadata, a compact QC status summary, validation and processing warnings, detector jump diagnostics, alignment/drift context, overview plots, replicate QC plots, main output-file locations, and compact previews of summary tables. It is diagnostic/reporting only: it uses already-created outputs and does not recompute or modify spectra. Missing plots or tables are skipped in the PDF as “not available”; processing still completes if PDF generation fails, and the failure is recorded in `ASTRA_processing_report.txt`.
+When `save_pdf_report=True`, AstraXAS also writes `ASTRA_processing_and_QC_report.pdf`. The PDF collects run metadata, a compact QC status summary, validation and processing warnings, detector jump and self-absorption diagnostics, alignment/drift context, overview plots, replicate QC plots, main output-file locations, and compact previews of summary tables. It is diagnostic/reporting only: it uses already-created outputs and does not recompute or modify spectra. Missing plots or tables are skipped in the PDF as “not available”; processing still completes if PDF generation fails, and the failure is recorded in `ASTRA_processing_report.txt`.
 
 Note: `plots/detector_raw_overview.png` was the former name for the aligned averaged IF overview. Current runs write only `plots/overview/aligned_averaged_IF_overview.png`. The normalized replicate QC plot was formerly named `<sample>_replicate_qc.png`; current runs write `<sample>_normalized_replicate_qc.png`.
 
@@ -380,24 +443,20 @@ The built-in Spectrum Viewer can open any `.dat` file produced by AstraXAS — i
 
 ---
 
-## Self-Absorption Diagnostic
-
-In fluorescence mode, AstraXAS can optionally flag possible fluorescence self-absorption / over-absorption when sample transmission channels are available. The diagnostic compares the normalized white-line amplitude of the processed fluorescence signal against the normalized white-line amplitude of the simultaneously measured sample transmission signal, `ln(I0/I1)`.
-
-This is a heuristic warning only. It does not correct spectra, does not modify the final fluorescence output, and should not be treated as proof that self-absorption is confirmed. Flagged spectra should be inspected by the user.
-
-When enabled, fluorescence-mode runs write `ASTRA_self_absorption_flags.dat`. Checked groups can also produce `plots/replicate_qc/<sample>_self_absorption_qc.png`, showing the normalized diagnostic fluorescence and transmission spectra with the white-line and continuum windows marked. In transmission or reference analysis mode, the diagnostic is disabled and no self-absorption flag file is created.
-
-The sensitivity options are `relaxed`, `normal`, `strict`, and `custom`. The relevant fields remain editable in the GUI and saved config.
-
----
-
 ## Configuration
 
-All processing parameters are exposed in the GUI and saveable as JSON config files. Common parameters:
+Processing parameters are stored in `AstraConfig` and saveable as JSON config files. The GUI exposes the common workflow controls, while some lower-level diagnostic thresholds are config-file/API options. Common parameters:
 
 | Parameter | Description |
 |---|---|
+| `version` | Version string written to reports and output headers |
+| `foil_keyword` | Filename substring used to identify separate foil scans; default `foil` |
+| `analysis_mode` | Sample analysis signal: `fluo`, `trans`, or `ref` |
+| `alignment_source` | Alignment source: `inline_ref` or `separate_foil` |
+| `alignment_anchor_mode` | Zero-shift anchor selection: `first_scan` or `selected_file` |
+| `alignment_anchor_path` | Path to selected `.xasd` anchor file when `alignment_anchor_mode="selected_file"` |
+| `foil_alignment_mode` | Signal used for separate foil alignment: `trans`, `ref`, or `fluo` |
+| `fluo_multiplicative_constant` | Scaling factor applied to IF before computing fluorescence μ(E) |
 | `e0` | Edge energy in eV |
 | `edge_preset_key` | Reporting metadata for the applied edge preset; default `custom` |
 | `edge_preset_label` | Human-readable preset label recorded in reports |
@@ -406,36 +465,39 @@ All processing parameters are exposed in the GUI and saveable as JSON config fil
 | `pre1`, `pre2` | Pre-edge fit range relative to E₀ (eV) |
 | `norm1`, `norm2` | Post-edge normalization range relative to E₀ (eV) |
 | `nnorm` | Normalization polynomial order (0, 1, or 2) |
-| `alignment_source` | Alignment strategy: `inline_ref` or `separate_foil` |
-| `alignment_anchor_mode` | Zero-shift anchor selection: `first_scan` or `selected_file` |
-| `alignment_anchor_path` | Path to selected `.xasd` anchor file when `alignment_anchor_mode="selected_file"` |
+| `step`, `nvict`, `make_flat` | Additional Larch `pre_edge` options passed through by the processor |
 | `align_window_min/max` | Energy window used for foil alignment |
 | `shift_bound_min/max` | Maximum allowed energy shift during alignment (eV) |
 | `alignment_quality_warn_threshold` | Quality threshold below which alignment warnings are emitted; default `0.7` |
 | `alignment_grid_points` | Number of coarse-search grid points before local alignment refinement; default `50` |
-| `fluo_multiplicative_constant` | Scaling factor applied to IF before computing μ(E) |
+| `interp_kind` | Interpolation kind used for scan interpolation to the group grid |
+| `warn_shift_abs_eV` | Shift magnitude that triggers a processing warning |
+| `exclude_filenames` | Explicit filenames to exclude before processing |
+| `exclude_filename_contains` | Filename substrings to exclude before processing |
+| `enable_shift_rejection` | Exclude replicates with large energy shifts |
+| `reject_shift_abs_eV` | Shift threshold for rejection (eV) |
+| `enable_auto_outlier_detection` | Flag replicates that deviate from the group mean |
+| `outlier_rms_threshold` | RMS deviation threshold for outlier detection |
 | `enable_auto_deglitch` | Interpolate isolated narrow detector spikes before merging |
 | `deglitch_threshold` | Robust local threshold for automatic spike detection |
 | `deglitch_window` | Local half-window used by automatic deglitching |
+| `deglitch_method` | Deglitch method name; current processing uses interpolation |
 | `deglitch_min_energy/max_energy` | Optional energy bounds for automatic deglitching |
 | `enable_manual_deglitch_range` | Interpolate a specified energy range before merging |
 | `manual_deglitch_min_energy/max_energy` | Energy interval for manual range interpolation |
 | `manual_deglitch_margin_points` | Neighboring points used to interpolate the manual range |
-| `enable_auto_outlier_detection` | Flag replicates that deviate from the group mean |
-| `outlier_rms_threshold` | RMS deviation threshold for outlier detection |
-| `enable_shift_rejection` | Exclude replicates with large energy shifts |
-| `reject_shift_abs_eV` | Shift threshold for rejection (eV) |
 | `enable_detector_jump_warnings` | Run diagnostic-only raw detector jump warnings; default `True` |
 | `detector_jump_threshold` | Point-to-point MAD multiplier for detector jump warnings; default `10.0` |
 | `detector_jump_min_relative` | Minimum relative jump size for detector jump warnings; default `0.05` |
-| `enable_self_absorption_check` | Enable fluorescence-only possible self-absorption warning; default `True` |
-| `self_absorption_sensitivity` | Flag threshold preset: `relaxed`, `normal`, `strict`, or `custom` |
-| `self_absorption_custom_threshold` | Custom fluorescence/transmission white-line amplitude ratio threshold |
-| `self_absorption_wl_min/max` | White-line diagnostic window relative to E0 |
-| `self_absorption_cont_min/max` | Continuum diagnostic window relative to E0 |
-| `self_absorption_min_trans_amp` | Minimum reliable transmission white-line amplitude |
-| `self_absorption_min_points` | Minimum finite points required in diagnostic windows |
-| `save_self_absorption_qc_plots` | Save `plots/replicate_qc/<sample>_self_absorption_qc.png`; default `True` |
+| `enable_self_absorption_check` | Enable fluorescence-mode possible self-absorption diagnostic; default `True` |
+| `self_absorption_sensitivity` | Threshold preset: `relaxed`, `normal`, `strict`, or `custom`; default `normal` |
+| `self_absorption_custom_threshold` | Custom ratio threshold used when sensitivity is `custom`; default `0.85` |
+| `self_absorption_wl_min` | White-line window minimum offset from E₀; default `0.0` eV |
+| `self_absorption_wl_max` | White-line window maximum offset from E₀; default `35.0` eV |
+| `self_absorption_cont_min` | Continuum window minimum offset from E₀; default `50.0` eV |
+| `self_absorption_cont_max` | Continuum window maximum offset from E₀; default `150.0` eV |
+| `self_absorption_min_trans_amp` | Minimum reliable sample transmission white-line amplitude; default `0.03` |
+| `self_absorption_min_points` | Minimum finite points required in diagnostic windows; default `5` |
 | `save_detector_health_overview_plot` | Save `plots/overview/detector_health_overview.png`; default `True` |
 | `save_analysis_signal_qc_plot` | Save `plots/overview/analysis_signal_qc.png`; default `True` |
 | `save_detector_raw_overview_plot` | Save `plots/overview/aligned_averaged_IF_overview.png`; legacy config name retained for compatibility |
@@ -444,8 +506,11 @@ All processing parameters are exposed in the GUI and saveable as JSON config fil
 | `save_norm_overview_plot` | Save `plots/overview/normalized_overview.png` |
 | `save_processed_mu_replicate_qc_plot` | Save pre-normalization processed μ(E) replicate QC plots; default `True` |
 | `save_replicate_qc_plots` | Save per-group replicate QC plots |
+| `save_raw_overview_plot` | Legacy alias retained for old configs |
 | `save_drift_plot` | Save `plots/overview/drift_tracker.png` |
+| `save_foil_alignment_plots` | Compatibility field; current processing does not generate a separate foil-alignment plot |
 | `save_pdf_report` | Generate `ASTRA_processing_and_QC_report.pdf`; default `True` when ReportLab is available |
+| `save_self_absorption_qc_plots` | Save `plots/replicate_qc/<sample>_self_absorption_qc.png` for checked groups; default `True` |
 | `plot_energy_min/max` | Energy range used for automatic overview and QC plots |
 
 In the GUI, the **Enable deglitching** checkbox and `automatic` / `manual` / `both` mode selector are translated into `enable_auto_deglitch` and `enable_manual_deglitch_range` in the saved configuration. The **Generate PDF QC report** checkbox controls `save_pdf_report`.
@@ -466,6 +531,7 @@ Save a config file for each edge (Fe K, Cu K, etc.) and load it at the start of 
 | Detector raw channel plotting | ✗ | ✗ | ✅ Built-in |
 | Replicate QC plots | Manual | ✗ | ✅ Automatic |
 | Outlier / shift rejection | ✗ | ✗ | ✅ Configurable |
+| Self-absorption flag | ✗ | ✗ | ✅ Heuristic QC flag (no correction) |
 | JSON config per edge | ✗ | ✗ | ✅ Save and load |
 | Python scripting API | ✗ | ✗ | ✅ `process_folder()` |
 | CLI | ✗ | ✗ | ✅ |
