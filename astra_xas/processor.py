@@ -442,37 +442,309 @@ def _annotate_detector_jump_summary_inclusion(records: list[dict]) -> None:
             record["note"] = f"{note}; {reason_note}" if note else reason_note
 
 
+def _detector_jump_category(record: dict) -> str:
+    channel = record.get("channel", "")
+    if record.get("include_in_summary"):
+        return "primary_summary"
+    if channel in FDT_DETECTOR_JUMP_CHANNELS:
+        return "fdt_diagnostic"
+    if channel in DERIVED_DETECTOR_JUMP_CHANNELS:
+        return "derived_signal"
+    if record.get("inside_alignment_window"):
+        return "edge_or_alignment_excluded"
+    if record.get("severity") == "low":
+        return "low_severity_excluded"
+    return "other_excluded"
+
+
+def _detector_jump_event_map(records: list[dict], energy_gap_eV: float = 5.0) -> tuple[dict[int, str], list[dict]]:
+    summary_records = sorted(
+        [record for record in records if record.get("include_in_summary")],
+        key=lambda record: float(record.get("energy_eV", 0.0)),
+    )
+    event_ids: dict[int, str] = {}
+    events: list[dict] = []
+    current: list[dict] = []
+
+    for record in summary_records:
+        if not current:
+            current = [record]
+            continue
+        previous_energy = float(current[-1].get("energy_eV", 0.0))
+        energy = float(record.get("energy_eV", 0.0))
+        if energy - previous_energy <= energy_gap_eV:
+            current.append(record)
+        else:
+            events.append({"records": current})
+            current = [record]
+    if current:
+        events.append({"records": current})
+
+    for idx, event in enumerate(events, start=1):
+        event_id = f"E{idx:03d}"
+        event_records = event["records"]
+        energies = [float(record.get("energy_eV", 0.0)) for record in event_records]
+        channels = sorted({str(record.get("channel", "")) for record in event_records})
+        scans = sorted({str(record.get("filename", "")) for record in event_records})
+        if len(channels) >= 3 and len(scans) >= 2:
+            interpretation = "common multi-channel feature"
+        elif len(channels) >= 2:
+            interpretation = "multi-channel feature"
+        else:
+            interpretation = "single-channel feature"
+        event.update({
+            "event_id": event_id,
+            "energy_center_eV": float(np.mean(energies)),
+            "energy_min_eV": float(np.min(energies)),
+            "energy_max_eV": float(np.max(energies)),
+            "channels": ",".join(channels),
+            "scans_affected": len(scans),
+            "entries": len(event_records),
+            "interpretation": interpretation,
+        })
+        for record in event_records:
+            event_ids[id(record)] = event_id
+    return event_ids, events
+
+
+def _write_detector_jump_rows(f, records: list[dict], event_ids: dict[int, str]) -> None:
+    f.write(
+        "# event_id\tcategory\tfilename\tchannel\tenergy_eV\tjump_size\trelative_jump\t"
+        "severity\tinside_plot_window\tinside_alignment_window\tinside_preedge_window\t"
+        "inside_norm_window\tinclude_in_summary\tnote\n"
+    )
+    for record in sorted(records, key=_detector_jump_sort_key):
+        f.write(
+            f"{event_ids.get(id(record), '')}\t{_detector_jump_category(record)}\t"
+            f"{record['filename']}\t{record['channel']}\t{record['energy_eV']:.6f}\t"
+            f"{record['jump_size']:.8g}\t{record['relative_jump']:.8g}\t"
+            f"{record['severity']}\t{record['inside_plot_window']}\t"
+            f"{record['inside_alignment_window']}\t{record['inside_preedge_window']}\t"
+            f"{record['inside_norm_window']}\t{record.get('include_in_summary', False)}\t"
+            f"{record['note']}\n"
+        )
+
+
+def _assign_event_ids(records: list[dict]) -> None:
+    """
+    Assign event_id to each record dict in-place.
+    Only records with include_in_summary=True receive a non-empty event_id.
+    Events are clusters of include_in_summary=True records within
+    ENERGY_CLUSTER_TOLERANCE eV of each other, sorted by energy.
+    """
+    ENERGY_CLUSTER_TOLERANCE = 5.0
+    summary = sorted(
+        [r for r in records if r.get("include_in_summary")],
+        key=lambda r: float(r.get("energy_eV", 0.0)),
+    )
+    for r in records:
+        r["event_id"] = ""
+    if not summary:
+        return
+
+    clusters: list[list[dict]] = []
+    current_cluster: list[dict] = [summary[0]]
+    for rec in summary[1:]:
+        if float(rec["energy_eV"]) - float(current_cluster[-1]["energy_eV"]) <= ENERGY_CLUSTER_TOLERANCE:
+            current_cluster.append(rec)
+        else:
+            clusters.append(current_cluster)
+            current_cluster = [rec]
+    clusters.append(current_cluster)
+
+    for i, cluster in enumerate(clusters):
+        event_id = f"E{i + 1:03d}"
+        for rec in cluster:
+            rec["event_id"] = event_id
+
+
 def _write_detector_jumps(path: Path, records: list[dict], config: AstraConfig) -> None:
+    _assign_event_ids(records)
     threshold = _config_float(config, "detector_jump_threshold", 10.0)
-    with path.open("w", encoding="utf-8") as f:
-        f.write("# ASTRA detector jump diagnostics\n")
-        f.write("# Generated by AstraXAS\n")
-        f.write("# Jump detected using point-to-point MAD spike detector\n")
-        f.write(
-            f"# Severity: low={threshold:g}-{2 * threshold:g}x MAD, "
-            f"medium={2 * threshold:g}-{5 * threshold:g}x MAD, "
-            f"high=>{5 * threshold:g}x MAD\n"
-        )
-        f.write(f"# Threshold multiplier: {threshold}\n")
-        f.write(f"# Min relative jump: {_config_float(config, 'detector_jump_min_relative', 0.05)}\n")
-        f.write("# Spike vs step discrimination: recovery window = 5 points\n")
-        f.write("# include_in_summary: True only for significant primary raw-channel jumps emphasized in ASTRA_processing_report.txt\n")
-        f.write("# NOTE: This file is diagnostic only. No data was modified.\n")
-        f.write("#\n")
-        f.write(
-            "# filename\tchannel\tenergy_eV\tjump_size\trelative_jump\tseverity\t"
-            "inside_plot_window\tinside_alignment_window\tinside_preedge_window\t"
-            "inside_norm_window\tinclude_in_summary\tnote\n"
-        )
-        for record in sorted(records, key=_detector_jump_sort_key):
+    min_relative = _config_float(config, "detector_jump_min_relative", 0.05)
+    summary_records = [record for record in records if record.get("include_in_summary")]
+    fdt_records = [record for record in records if record.get("channel") in FDT_DETECTOR_JUMP_CHANNELS]
+    derived_records = [record for record in records if record.get("channel") in DERIVED_DETECTOR_JUMP_CHANNELS]
+    other_records = [
+        record
+        for record in records
+        if not record.get("include_in_summary")
+        and record.get("channel") not in FDT_DETECTOR_JUMP_CHANNELS
+        and record.get("channel") not in DERIVED_DETECTOR_JUMP_CHANNELS
+    ]
+    n_other = len(records) - len(summary_records) - len(fdt_records) - len(derived_records)
+    total_scans = len({str(record.get("filename", "")) for record in records if record.get("filename")})
+
+    severity_rank = {"low": 0, "medium": 1, "high": 2}
+    table_header = (
+        "filename\tchannel\tenergy_eV\tjump_size\trelative_jump\tseverity\t"
+        "inside_plot_window\tinside_alignment_window\tinside_preedge_window\t"
+        "inside_norm_window\tinclude_in_summary\tevent_id\tcategory\tnote\n"
+    )
+
+    def category(record: dict) -> str:
+        channel = record.get("channel", "")
+        if record.get("include_in_summary"):
+            return "primary_summary"
+        if channel in FDT_DETECTOR_JUMP_CHANNELS:
+            return "fdt_diagnostic"
+        if channel in DERIVED_DETECTOR_JUMP_CHANNELS:
+            return "derived_signal"
+        if channel in PRIMARY_DETECTOR_JUMP_CHANNELS:
+            return "edge_or_alignment_excluded"
+        return "other_excluded"
+
+    def write_full_rows(f, rows: list[dict]) -> None:
+        for record in rows:
             f.write(
                 f"{record['filename']}\t{record['channel']}\t{record['energy_eV']:.6f}\t"
                 f"{record['jump_size']:.8g}\t{record['relative_jump']:.8g}\t"
                 f"{record['severity']}\t{record['inside_plot_window']}\t"
                 f"{record['inside_alignment_window']}\t{record['inside_preedge_window']}\t"
                 f"{record['inside_norm_window']}\t{record.get('include_in_summary', False)}\t"
-                f"{record['note']}\n"
+                f"{record.get('event_id', '')}\t{category(record)}\t{record['note']}\n"
             )
+
+    def filename_energy_key(record: dict):
+        return (str(record.get("filename", "")), float(record.get("energy_eV", 0.0)))
+
+    def section1_key(record: dict):
+        return (
+            str(record.get("event_id", "")),
+            str(record.get("filename", "")),
+            float(record.get("energy_eV", 0.0)),
+        )
+
+    def full_table_key(record: dict):
+        return (not bool(record.get("include_in_summary")), *_detector_jump_sort_key(record))
+
+    events = []
+    for event_id in sorted({record.get("event_id", "") for record in summary_records if record.get("event_id")}):
+        cluster = [record for record in summary_records if record.get("event_id") == event_id]
+        energies = [float(record.get("energy_eV", 0.0)) for record in cluster]
+        channels = ",".join(sorted({str(record.get("channel", "")) for record in cluster}))
+        scans_affected = len({str(record.get("filename", "")) for record in cluster if record.get("filename")})
+        max_severity = max((str(record.get("severity", "low")) for record in cluster), key=lambda s: severity_rank.get(s, -1))
+        events.append({
+            "event_id": event_id,
+            "energy_center_eV": float(np.mean(energies)),
+            "energy_min_eV": float(np.min(energies)),
+            "energy_max_eV": float(np.max(energies)),
+            "channels": channels,
+            "scans_affected": scans_affected,
+            "entries": len(cluster),
+            "max_severity": max_severity,
+        })
+
+    with path.open("w", encoding="utf-8") as f:
+        f.write("# ============================================================\n")
+        f.write("# ASTRA DETECTOR JUMP DIAGNOSTICS\n")
+        f.write("# Diagnostic only. No data was modified.\n")
+        f.write("# Generated by AstraXAS\n")
+        f.write("# ============================================================\n")
+        f.write("#\n")
+        f.write("# Detection method: point-to-point MAD spike detector\n")
+        f.write(
+            f"# Severity thresholds: low={threshold:g}-{2 * threshold:g}x MAD, "
+            f"medium={2 * threshold:g}-{5 * threshold:g}x MAD, "
+            f"high=>{5 * threshold:g}x MAD\n"
+        )
+        f.write(f"#   where T = detector_jump_threshold = {threshold}\n")
+        f.write(f"# Min relative jump: {min_relative}\n")
+        f.write("# Spike vs step discrimination: recovery window = 5 points\n")
+        f.write("#\n")
+        f.write("# Channel classification:\n")
+        f.write("#   Primary raw channels (counted in main summary): I0, I1, I2, IF\n")
+        f.write("#   Diagnostic channel (reported separately):       FDT\n")
+        f.write("#   Derived signals (excluded from main summary):   IF_over_I0, ln_I0_I1, ln_I1_I2\n")
+        f.write("#\n")
+        f.write("# ============================================================\n")
+        f.write("# SUMMARY\n")
+        f.write("# ============================================================\n")
+        f.write(f"# Full diagnostic entries:                   {len(records)}\n")
+        f.write(f"# Significant primary raw-channel entries:   {len(summary_records)}   (include_in_summary=True)\n")
+        f.write(f"# FDT diagnostic spikes:                     {len(fdt_records)}\n")
+        f.write(f"# Derived-signal features excluded:          {len(derived_records)}\n")
+        f.write(f"# Other excluded entries:                    {n_other}\n")
+        f.write("#\n")
+        f.write("# ============================================================\n")
+        f.write("# GROUPED SIGNIFICANT EVENTS\n")
+        f.write("# ============================================================\n")
+        f.write("# Events are clusters of significant primary raw-channel entries\n")
+        f.write("# within 5 eV of each other. One physical event may appear in\n")
+        f.write("# multiple channels and/or multiple scans.\n")
+        f.write("#\n")
+        f.write("# event_id\tenergy_center_eV\tenergy_range_eV\tmax_severity\tchannels\tscans_affected\tentries\n")
+        if events:
+            for event in events:
+                if event["energy_min_eV"] == event["energy_max_eV"]:
+                    energy_range = f"{event['energy_min_eV']:.2f}"
+                else:
+                    energy_range = f"{event['energy_min_eV']:.2f}-{event['energy_max_eV']:.2f}"
+                f.write(
+                    f"# {event['event_id']}\t{event['energy_center_eV']:.2f}\t{energy_range}\t"
+                    f"{event['max_severity']}\t{event['channels']}\t"
+                    f"{event['scans_affected']}/{total_scans}\t{event['entries']}\n"
+                )
+        else:
+            f.write("# No significant primary raw-channel events detected.\n")
+        f.write("#\n")
+        f.write(table_header)
+
+        f.write("# ============================================================\n")
+        f.write("# SECTION 1: Significant primary raw-channel jumps\n")
+        f.write("# These entries have include_in_summary=True.\n")
+        f.write("# Channels: I0, I1, I2, IF\n")
+        f.write("# ============================================================\n")
+        f.write("# Columns: filename channel energy_eV jump_size relative_jump severity event_id inside_alignment_window inside_preedge_window inside_norm_window note\n")
+        if summary_records:
+            write_full_rows(f, sorted(summary_records, key=section1_key))
+        else:
+            f.write("# None detected.\n")
+
+        f.write("# ============================================================\n")
+        f.write("# SECTION 2: FDT diagnostic spikes\n")
+        f.write("# FDT is a diagnostic channel. These entries are not counted\n")
+        f.write("# in the main detector-jump summary.\n")
+        f.write("# ============================================================\n")
+        f.write("# Columns: filename channel energy_eV jump_size relative_jump severity note\n")
+        if fdt_records:
+            write_full_rows(f, sorted(fdt_records, key=filename_energy_key))
+        else:
+            f.write("# None detected.\n")
+
+        f.write("# ============================================================\n")
+        f.write("# SECTION 3: Derived-signal sharp features\n")
+        f.write("# Channels: IF_over_I0, ln_I0_I1, ln_I1_I2\n")
+        f.write("# These are excluded from the main summary because sharp changes\n")
+        f.write("# may reflect real XAS spectral features near absorption edges.\n")
+        f.write("# ============================================================\n")
+        f.write("# Columns: filename channel energy_eV jump_size relative_jump severity inside_alignment_window note\n")
+        if derived_records:
+            write_full_rows(f, sorted(derived_records, key=filename_energy_key))
+        else:
+            f.write("# None detected.\n")
+
+        f.write("# ============================================================\n")
+        f.write("# SECTION 4: Other excluded entries\n")
+        f.write("# Primary raw-channel entries excluded from the main summary\n")
+        f.write("# (e.g. inside edge/alignment window with low severity).\n")
+        f.write("# ============================================================\n")
+        f.write("# Columns: filename channel energy_eV jump_size relative_jump severity inside_alignment_window inside_preedge_window inside_norm_window note\n")
+        if other_records:
+            write_full_rows(f, sorted(other_records, key=filename_energy_key))
+        else:
+            f.write("# None.\n")
+
+        f.write("# ============================================================\n")
+        f.write("# SECTION 5: Full diagnostic table (machine-readable)\n")
+        f.write("# All entries. Tab-separated. One row per detected feature.\n")
+        f.write("# ============================================================\n")
+        f.write("# Columns: filename channel energy_eV jump_size relative_jump severity inside_plot_window inside_alignment_window inside_preedge_window inside_norm_window include_in_summary event_id category note\n")
+        if records:
+            write_full_rows(f, sorted(records, key=full_table_key))
+        else:
+            f.write("# None detected.\n")
 
 
 def _detector_jump_energy_regions(records: list[dict]) -> str:
