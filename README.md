@@ -336,6 +336,29 @@ Note: `plots/detector_raw_overview.png` was the former name for the aligned aver
 
 ---
 
+## Edge Presets
+
+AstraXAS includes a small editable edge-preset library for common starting templates: P K, S K, Fe K, Co K, Ni K, and Ce L3. Presets are not final scientific parameters and are not absolute calibration. They provide approximate reference/start E0 values plus relative pre-edge, normalization, alignment, and plot windows.
+
+In the GUI, choosing a preset in the dropdown does not change any fields by itself. Click **Apply preset** to copy the template into the editable fields. After applying, E0, pre-edge range, normalization range, alignment window, and plot range remain normal editable inputs.
+
+When a preset is applied, AstraXAS records the preset label, whether it was applied, the preset reference E0, the final E0 used, and the preset note in `ASTRA_processing_report.txt` and `ASTRA_processing_and_QC_report.pdf`.
+
+For scripts, presets are available from `astra_xas.edge_presets`:
+
+```python
+from astra_xas import AstraConfig
+from astra_xas.edge_presets import apply_edge_preset_to_config
+
+config = AstraConfig()
+apply_edge_preset_to_config(config, "p_k")
+# Edit config.e0, config.pre1/pre2, config.norm1/norm2, etc. as needed.
+```
+
+Old configurations and custom/manual workflows behave the same unless a preset is explicitly applied.
+
+---
+
 ## Spectrum Viewer
 
 The built-in Spectrum Viewer can open any `.dat` file produced by AstraXAS — including detector raw files — or any two-column text file.
@@ -362,6 +385,10 @@ All processing parameters are exposed in the GUI and saveable as JSON config fil
 | Parameter | Description |
 |---|---|
 | `e0` | Edge energy in eV |
+| `edge_preset_key` | Reporting metadata for the applied edge preset; default `custom` |
+| `edge_preset_label` | Human-readable preset label recorded in reports |
+| `edge_preset_applied` | Whether a preset was explicitly applied; default `False` |
+| `edge_preset_note` | Preset note recorded in reports |
 | `pre1`, `pre2` | Pre-edge fit range relative to E₀ (eV) |
 | `norm1`, `norm2` | Post-edge normalization range relative to E₀ (eV) |
 | `nnorm` | Normalization polynomial order (0, 1, or 2) |

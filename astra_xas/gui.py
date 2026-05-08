@@ -10,6 +10,7 @@ from tkinter import filedialog, messagebox
 from tkinter import ttk
 
 from .config import AstraConfig
+from .edge_presets import get_edge_preset, list_edge_presets
 from .processor import process_folder
 from .spectrum_viewer import open_spectrum_viewer
 
@@ -19,6 +20,9 @@ ALIGNMENT_ANCHOR_MODE_LABELS = {
     "selected_file": "selected scan file",
 }
 ALIGNMENT_ANCHOR_MODE_VALUES = {label: value for value, label in ALIGNMENT_ANCHOR_MODE_LABELS.items()}
+EDGE_PRESET_LABELS = {"custom": "Custom"}
+EDGE_PRESET_LABELS.update({preset.key: preset.label for preset in list_edge_presets()})
+EDGE_PRESET_VALUES = {label: key for key, label in EDGE_PRESET_LABELS.items()}
 
 
 class AstraGui(tk.Tk):
@@ -39,6 +43,11 @@ class AstraGui(tk.Tk):
         self.alignment_anchor_path = tk.StringVar(value="")
         self.foil_mode = tk.StringVar(value="trans")
         self.foil_keyword = tk.StringVar(value="foil")
+        self.edge_preset_selection = tk.StringVar(value="Custom")
+        self.edge_preset_key = tk.StringVar(value="custom")
+        self.edge_preset_label = tk.StringVar(value="Custom")
+        self.edge_preset_applied = tk.BooleanVar(value=False)
+        self.edge_preset_note = tk.StringVar(value="")
         self.e0 = tk.StringVar(value="7121.030")
         self.pre1 = tk.StringVar(value="-229.740")
         self.pre2 = tk.StringVar(value="-49.980")
@@ -264,16 +273,34 @@ class AstraGui(tk.Tk):
         self.foil_keyword_entry = ttk.Entry(frame, textvariable=self.foil_keyword, width=16)
         self.foil_keyword_entry.grid(row=5, column=1, sticky="w", padx=6, pady=4)
 
-        ttk.Label(frame, text="E0 / eV").grid(row=6, column=0, sticky="w", pady=4)
+        ttk.Label(frame, text="Edge preset").grid(row=6, column=0, sticky="w", pady=4)
+        ttk.Combobox(
+            frame,
+            textvariable=self.edge_preset_selection,
+            values=tuple(EDGE_PRESET_VALUES.keys()),
+            width=16,
+            state="readonly",
+        ).grid(row=6, column=1, sticky="w", padx=6, pady=4)
+        ttk.Button(frame, text="Apply preset", command=self._apply_edge_preset).grid(
+            row=6, column=2, sticky="w", pady=4
+        )
+
+        ttk.Label(
+            frame,
+            text="Preset values are editable starting values. Verify E0 and fit windows manually.",
+            wraplength=430,
+        ).grid(row=7, column=0, columnspan=3, sticky="w", pady=(0, 4))
+
+        ttk.Label(frame, text="E0 / eV").grid(row=8, column=0, sticky="w", pady=4)
         ttk.Entry(frame, textvariable=self.e0, width=16).grid(
-            row=6, column=1, sticky="w", padx=6, pady=4
+            row=8, column=1, sticky="w", padx=6, pady=4
         )
 
         ttk.Label(
             frame,
             text="Parameters are user-defined. Save a config file for each edge or experiment type.",
             wraplength=430,
-        ).grid(row=7, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        ).grid(row=9, column=0, columnspan=3, sticky="w", pady=(6, 0))
 
     def _build_advanced_section(self, parent):
         frame = ttk.LabelFrame(
@@ -641,6 +668,41 @@ class AstraGui(tk.Tk):
         value = self.alignment_anchor_mode.get()
         return ALIGNMENT_ANCHOR_MODE_VALUES.get(value, value)
 
+    def _edge_preset_key_value(self) -> str:
+        value = self.edge_preset_selection.get()
+        return EDGE_PRESET_VALUES.get(value, value)
+
+    def _format_preset_number(self, value: float) -> str:
+        return f"{value:.3f}"
+
+    def _apply_edge_preset(self):
+        key = self._edge_preset_key_value()
+        preset = get_edge_preset(key)
+        if preset is None:
+            self.edge_preset_selection.set("Custom")
+            self.edge_preset_key.set("custom")
+            self.edge_preset_label.set("Custom")
+            self.edge_preset_applied.set(False)
+            self.edge_preset_note.set("")
+            self.status.set("Edge preset set to Custom; existing fields were not changed.")
+            return
+
+        e0 = preset.e0_ref
+        self.e0.set(self._format_preset_number(e0))
+        self.pre1.set(self._format_preset_number(preset.pre1_rel))
+        self.pre2.set(self._format_preset_number(preset.pre2_rel))
+        self.norm1.set(self._format_preset_number(preset.norm1_rel))
+        self.norm2.set(self._format_preset_number(preset.norm2_rel))
+        self.align_min.set(self._format_preset_number(e0 + preset.align_min_rel))
+        self.align_max.set(self._format_preset_number(e0 + preset.align_max_rel))
+        self.plot_min.set(self._format_preset_number(e0 + preset.plot_min_rel))
+        self.plot_max.set(self._format_preset_number(e0 + preset.plot_max_rel))
+        self.edge_preset_key.set(preset.key)
+        self.edge_preset_label.set(preset.label)
+        self.edge_preset_applied.set(True)
+        self.edge_preset_note.set(preset.notes)
+        self.status.set(f"Applied {preset.label} starting preset. Verify E0 and windows manually.")
+
     def _float(self, name: str, var: tk.StringVar) -> float:
         try:
             return float(var.get())
@@ -729,6 +791,10 @@ class AstraGui(tk.Tk):
             foil_alignment_mode=self.foil_mode.get(),
             foil_keyword=keyword,
             e0=self._float("E0", self.e0),
+            edge_preset_key=self.edge_preset_key.get(),
+            edge_preset_label=self.edge_preset_label.get(),
+            edge_preset_applied=self.edge_preset_applied.get(),
+            edge_preset_note=self.edge_preset_note.get(),
             pre1=self._float("pre1", self.pre1),
             pre2=self._float("pre2", self.pre2),
             norm1=self._float("norm1", self.norm1),
@@ -778,6 +844,10 @@ class AstraGui(tk.Tk):
             "foil_alignment_mode": c.foil_alignment_mode,
             "foil_keyword": c.foil_keyword,
             "e0": c.e0,
+            "edge_preset_key": c.edge_preset_key,
+            "edge_preset_label": c.edge_preset_label,
+            "edge_preset_applied": c.edge_preset_applied,
+            "edge_preset_note": c.edge_preset_note,
             "pre1": c.pre1,
             "pre2": c.pre2,
             "norm1": c.norm1,
@@ -826,6 +896,10 @@ class AstraGui(tk.Tk):
             "foil_alignment_mode": self.foil_mode,
             "foil_keyword": self.foil_keyword,
             "e0": self.e0,
+            "edge_preset_key": self.edge_preset_key,
+            "edge_preset_label": self.edge_preset_label,
+            "edge_preset_applied": self.edge_preset_applied,
+            "edge_preset_note": self.edge_preset_note,
             "pre1": self.pre1,
             "pre2": self.pre2,
             "norm1": self.norm1,
@@ -876,6 +950,23 @@ class AstraGui(tk.Tk):
                     var.set("")
                 else:
                     var.set(str(data[key]))
+
+        preset_key = str(data.get("edge_preset_key", "custom"))
+        preset = get_edge_preset(preset_key)
+        if preset is not None:
+            self.edge_preset_selection.set(preset.label)
+            self.edge_preset_label.set(str(data.get("edge_preset_label", preset.label)))
+            if not self.edge_preset_note.get():
+                self.edge_preset_note.set(preset.notes)
+        else:
+            self.edge_preset_selection.set("Custom")
+            self.edge_preset_key.set("custom")
+            if "edge_preset_label" not in data:
+                self.edge_preset_label.set("Custom")
+            if "edge_preset_applied" not in data:
+                self.edge_preset_applied.set(False)
+            if "edge_preset_note" not in data:
+                self.edge_preset_note.set("")
 
         if "enable_deglitching" not in data or "deglitch_mode" not in data:
             auto_enabled = self.enable_auto_deglitch.get()

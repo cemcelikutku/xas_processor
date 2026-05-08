@@ -11,6 +11,7 @@ from .config import AstraConfig
 from .io import collect_xasd_files, load_xasd, split_replicate_suffix, sanitize_name, build_default_output_directory
 from .signals import compute_signals, get_signal
 from .alignment import find_best_shift
+from .edge_presets import get_edge_preset
 from .grouping import group_samples
 from .export import save_two_col
 from .plotting import plot_overview, plot_replicate_qc, plot_drift, plot_detector_health_overview, plot_analysis_signal_qc
@@ -877,6 +878,13 @@ def _write_pdf_qc_report(output_path: Path, context: dict) -> None:
     overview_dir = Path(context["overview_dir"])
     replicate_qc_dir = Path(context["replicate_qc_dir"])
     alignment_anchor_info = context.get("alignment_anchor_info", {})
+    edge_preset = get_edge_preset(getattr(config, "edge_preset_key", "custom"))
+    edge_preset_ref_e0 = f"{edge_preset.e0_ref:.3f}" if edge_preset is not None else "N/A"
+    edge_preset_note = getattr(config, "edge_preset_note", "") or (
+        "Preset values are editable starting values, not absolute calibration."
+        if getattr(config, "edge_preset_applied", False)
+        else "N/A"
+    )
 
     doc = SimpleDocTemplate(
         str(output_path),
@@ -1087,7 +1095,11 @@ def _write_pdf_qc_report(output_path: Path, context: dict) -> None:
         ("Alignment signal", context.get("alignment_signal_label", "N/A")),
         ("Alignment anchor mode", alignment_anchor_info.get("mode", "N/A")),
         ("Alignment anchor file", alignment_anchor_info.get("path") or "N/A"),
-        ("E0", getattr(config, "e0", "N/A")),
+        ("Edge preset", getattr(config, "edge_preset_label", "Custom")),
+        ("Preset applied", getattr(config, "edge_preset_applied", False)),
+        ("Preset reference E0", edge_preset_ref_e0),
+        ("Final E0 used", getattr(config, "e0", "N/A")),
+        ("Preset note", edge_preset_note),
         ("Normalization order nnorm", getattr(config, "nnorm", "N/A")),
         ("Auto-deglitching", _config_bool(config, "enable_auto_deglitch", False)),
         ("Manual range deglitching", _config_bool(config, "enable_manual_deglitch_range", False)),
@@ -2324,6 +2336,13 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
         if not path.startswith("plots/overview/") and not path.startswith("plots/replicate_qc/")
     ]
     processing_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    edge_preset = get_edge_preset(getattr(config, "edge_preset_key", "custom"))
+    edge_preset_ref_e0 = f"{edge_preset.e0_ref:.6g}" if edge_preset is not None else "N/A"
+    edge_preset_note = getattr(config, "edge_preset_note", "") or (
+        "Preset values are editable starting values, not absolute calibration."
+        if getattr(config, "edge_preset_applied", False)
+        else "N/A"
+    )
     pdf_report_status = {"status": "disabled", "path": None, "error": ""}
     if getattr(config, "save_pdf_report", True):
         pdf_path = output_dir / "ASTRA_processing_and_QC_report.pdf"
@@ -2369,6 +2388,11 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
         f.write(f"Replicate outliers skipped: {len(auto_outlier_entries)}\n")
         f.write(f"Foils found: {len(foil_entries)}\n")
         f.write(f"Groups processed: {len(group_summary_rows)}\n")
+        f.write(f"Edge preset: {getattr(config, 'edge_preset_label', 'Custom')}\n")
+        f.write(f"Preset applied: {getattr(config, 'edge_preset_applied', False)}\n")
+        f.write(f"Preset reference E0: {edge_preset_ref_e0}\n")
+        f.write(f"Final E0 used: {config.e0}\n")
+        f.write(f"Preset note: {edge_preset_note}\n")
         f.write(f"Alignment source: {alignment_source}\n")
         f.write(f"Alignment signal: {alignment_signal_label}\n")
         f.write(f"Alignment anchor mode: {alignment_anchor_info['mode']}\n")

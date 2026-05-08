@@ -30,6 +30,10 @@ class AstraConfig:
     norm2: float = 227.220
     nnorm: int = 1
     e0: float = 7121.030
+    edge_preset_key: str = "custom"
+    edge_preset_label: str = "Custom"
+    edge_preset_applied: bool = False
+    edge_preset_note: str = ""
     step: float | None = None
     nvict: int = 0
     make_flat: bool = True
