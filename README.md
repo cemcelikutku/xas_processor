@@ -338,7 +338,7 @@ Note: `plots/detector_raw_overview.png` was the former name for the aligned aver
 
 ## Edge Presets
 
-AstraXAS includes a small editable edge-preset library for common starting templates: P K, S K, Fe K, Co K, Ni K, and Ce L3. Presets are not final scientific parameters and are not absolute calibration. They provide approximate reference/start E0 values plus relative pre-edge, normalization, alignment, and plot windows.
+AstraXAS includes an editable edge-preset library for common starting templates: Mg K, Al K, Si K, P K, S K, Cl K, K K, Ca K, Ti K, V K, Cr K, Mn K, Fe K, Co K, Ni K, Cu K, Zn K, Ga K, Ge K, As K, Se K, and Ce L3. Presets are not final scientific parameters and are not absolute calibration. They provide approximate reference/start E0 values plus relative pre-edge, normalization, alignment, and plot windows.
 
 In the GUI, choosing a preset in the dropdown does not change any fields by itself. Click **Apply preset** to copy the template into the editable fields. After applying, E0, pre-edge range, normalization range, alignment window, and plot range remain normal editable inputs.
 

@@ -24,11 +24,23 @@ class EdgePreset:
     notes: str = ""
 
 
-_TENDER_K = {
-    "family": "tender_K",
+_LIGHT_TENDER_K = {
+    "family": "light_tender_K",
     "pre1_rel": -80.0,
     "pre2_rel": -20.0,
     "norm1_rel": 80.0,
+    "norm2_rel": 700.0,
+    "align_min_rel": -20.0,
+    "align_max_rel": 40.0,
+    "plot_min_rel": -60.0,
+    "plot_max_rel": 250.0,
+}
+
+_MEDIUM_K = {
+    "family": "medium_K",
+    "pre1_rel": -120.0,
+    "pre2_rel": -30.0,
+    "norm1_rel": 100.0,
     "norm2_rel": 700.0,
     "align_min_rel": -20.0,
     "align_max_rel": 40.0,
@@ -48,6 +60,18 @@ _TRANSITION_METAL_K = {
     "plot_max_rel": 200.0,
 }
 
+_HEAVIER_K = {
+    "family": "heavier_K",
+    "pre1_rel": -200.0,
+    "pre2_rel": -50.0,
+    "norm1_rel": 150.0,
+    "norm2_rel": 900.0,
+    "align_min_rel": -20.0,
+    "align_max_rel": 40.0,
+    "plot_min_rel": -50.0,
+    "plot_max_rel": 250.0,
+}
+
 _L3_EDGE = {
     "family": "l3_edge",
     "pre1_rel": -150.0,
@@ -61,11 +85,38 @@ _L3_EDGE = {
 }
 
 _COMMON_NOTE = (
-    "Approximate reference/start E0 and editable fit-window template; "
-    "verify E0, fit windows, alignment window, and plot range manually."
+    "Approximate starting values. Verify E0 and fit windows manually. "
+    "Also verify alignment and plot windows for the dataset."
 )
 
 _PRESETS: tuple[EdgePreset, ...] = (
+    EdgePreset(
+        key="mg_k",
+        label="Mg K",
+        element="Mg",
+        edge="K",
+        e0_ref=1303.0,
+        notes=_COMMON_NOTE,
+        **_LIGHT_TENDER_K,
+    ),
+    EdgePreset(
+        key="al_k",
+        label="Al K",
+        element="Al",
+        edge="K",
+        e0_ref=1559.6,
+        notes=_COMMON_NOTE,
+        **_LIGHT_TENDER_K,
+    ),
+    EdgePreset(
+        key="si_k",
+        label="Si K",
+        element="Si",
+        edge="K",
+        e0_ref=1839.0,
+        notes=_COMMON_NOTE,
+        **_LIGHT_TENDER_K,
+    ),
     EdgePreset(
         key="p_k",
         label="P K",
@@ -73,7 +124,7 @@ _PRESETS: tuple[EdgePreset, ...] = (
         edge="K",
         e0_ref=2145.5,
         notes=_COMMON_NOTE,
-        **_TENDER_K,
+        **_LIGHT_TENDER_K,
     ),
     EdgePreset(
         key="s_k",
@@ -82,7 +133,70 @@ _PRESETS: tuple[EdgePreset, ...] = (
         edge="K",
         e0_ref=2472.0,
         notes=_COMMON_NOTE,
-        **_TENDER_K,
+        **_LIGHT_TENDER_K,
+    ),
+    EdgePreset(
+        key="cl_k",
+        label="Cl K",
+        element="Cl",
+        edge="K",
+        e0_ref=2822.4,
+        notes=_COMMON_NOTE,
+        **_LIGHT_TENDER_K,
+    ),
+    EdgePreset(
+        key="k_k",
+        label="K K",
+        element="K",
+        edge="K",
+        e0_ref=3608.4,
+        notes=_COMMON_NOTE,
+        **_MEDIUM_K,
+    ),
+    EdgePreset(
+        key="ca_k",
+        label="Ca K",
+        element="Ca",
+        edge="K",
+        e0_ref=4038.5,
+        notes=_COMMON_NOTE,
+        **_MEDIUM_K,
+    ),
+    EdgePreset(
+        key="ti_k",
+        label="Ti K",
+        element="Ti",
+        edge="K",
+        e0_ref=4966.0,
+        notes=_COMMON_NOTE,
+        **_TRANSITION_METAL_K,
+    ),
+    EdgePreset(
+        key="v_k",
+        label="V K",
+        element="V",
+        edge="K",
+        e0_ref=5465.0,
+        notes=_COMMON_NOTE,
+        **_TRANSITION_METAL_K,
+    ),
+    EdgePreset(
+        key="cr_k",
+        label="Cr K",
+        element="Cr",
+        edge="K",
+        e0_ref=5989.0,
+        notes=_COMMON_NOTE,
+        **_TRANSITION_METAL_K,
+    ),
+    EdgePreset(
+        key="mn_k",
+        label="Mn K",
+        element="Mn",
+        edge="K",
+        e0_ref=6539.0,
+        notes=_COMMON_NOTE,
+        **_TRANSITION_METAL_K,
     ),
     EdgePreset(
         key="fe_k",
@@ -110,6 +224,60 @@ _PRESETS: tuple[EdgePreset, ...] = (
         e0_ref=8333.0,
         notes=_COMMON_NOTE,
         **_TRANSITION_METAL_K,
+    ),
+    EdgePreset(
+        key="cu_k",
+        label="Cu K",
+        element="Cu",
+        edge="K",
+        e0_ref=8979.0,
+        notes=_COMMON_NOTE,
+        **_TRANSITION_METAL_K,
+    ),
+    EdgePreset(
+        key="zn_k",
+        label="Zn K",
+        element="Zn",
+        edge="K",
+        e0_ref=9659.0,
+        notes=_COMMON_NOTE,
+        **_TRANSITION_METAL_K,
+    ),
+    EdgePreset(
+        key="ga_k",
+        label="Ga K",
+        element="Ga",
+        edge="K",
+        e0_ref=10367.0,
+        notes=_COMMON_NOTE,
+        **_HEAVIER_K,
+    ),
+    EdgePreset(
+        key="ge_k",
+        label="Ge K",
+        element="Ge",
+        edge="K",
+        e0_ref=11103.0,
+        notes=_COMMON_NOTE,
+        **_HEAVIER_K,
+    ),
+    EdgePreset(
+        key="as_k",
+        label="As K",
+        element="As",
+        edge="K",
+        e0_ref=11867.0,
+        notes=_COMMON_NOTE,
+        **_HEAVIER_K,
+    ),
+    EdgePreset(
+        key="se_k",
+        label="Se K",
+        element="Se",
+        edge="K",
+        e0_ref=12658.0,
+        notes=_COMMON_NOTE,
+        **_HEAVIER_K,
     ),
     EdgePreset(
         key="ce_l3",
@@ -158,4 +326,3 @@ def apply_edge_preset_to_config(config: AstraConfig, key: str) -> AstraConfig:
     config.edge_preset_applied = True
     config.edge_preset_note = preset.notes
     return config
-
