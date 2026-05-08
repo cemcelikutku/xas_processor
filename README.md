@@ -254,6 +254,16 @@ Start a watch session with:
 python -m astra_xas.beamtime watch /path/to/incoming
 ```
 
+For longer beamtime sessions, pass `--log-file PATH` or `-l PATH` to mirror stdout to a persistent file. The file is opened in append mode and line-buffered, so you can `tail -f` it in real time during the experiment. Each line is prefixed with an ISO timestamp:
+
+```bash
+python -m astra_xas.beamtime watch /data/incoming \
+    -c configs/p_k.json \
+    -l ~/beamtime_logs/2026-05-15.log
+```
+
+The log file captures watcher and replay stdout messages, including scan status lines and warnings. The structured Beamtime session log remains at `<output_dir>/ASTRA_beamtime_session.log`. The two files serve different purposes: the tee log is a human-readable transcript, while the session log is the structured per-scan record.
+
 By default, Beamtime Mode writes to `<incoming>-beamtime`. Use `-o / --output-dir` to choose another folder, or `-c / --config` to load an `AstraConfig` JSON file. The watcher considers only `.xasd` files directly inside the watched folder and ignores subdirectories.
 
 While the watcher is running, AstraXAS writes a per-scan QC plot under `<output_dir>/plots/beamtime/<scan>.png` and a live HTML dashboard at `<output_dir>/index.html` that auto-refreshes every five seconds. Open `index.html` in any browser to monitor scan-by-scan QC during a beamtime. The dashboard uses only relative paths, so it works over `file://` or via `python -m http.server` from the output directory.
