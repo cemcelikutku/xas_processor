@@ -16,6 +16,17 @@ Do this before the experiment starts. If possible, do it at least
 a few hours in advance so you have time to debug any Windows-
 specific issues without time pressure.
 
+> **A note on terminals.** This guide uses **PowerShell** throughout.
+> If your prompt starts with `C:\Users\you>` you're in classic
+> Command Prompt (CMD), and some commands in this guide won't
+> work as written. If your prompt starts with `PS C:\Users\you>`
+> you're in PowerShell — that's what we want.
+>
+> To open PowerShell: press `Win+X` and choose **Windows PowerShell**
+> or **Terminal**. Or press `Win+R`, type `powershell`, and press
+> Enter. If you have Windows Terminal installed, it defaults to
+> PowerShell as well.
+
 ### What you need
 
 - Windows 10 or Windows 11
@@ -58,6 +69,37 @@ either re-run the installer with the PATH checkbox enabled, or
 add `C:\Users\<you>\AppData\Local\Programs\Python\Python311\` and
 its `Scripts\` subdirectory to PATH manually.
 
+#### Common pitfall: "Python was not found"
+
+If `python --version` says **"Python was not found; run without
+arguments to install from the Microsoft Store"** even after you've
+installed Python — Windows is intercepting the `python` command
+with a Microsoft Store alias instead of using your real Python
+install. This is a Windows 10/11 default setting and a frequent
+trap.
+
+To fix:
+
+1. Open Windows **Settings** (`Win+I`).
+2. Go to **Apps** → **Advanced app settings** → **App execution
+   aliases**.
+3. Turn off both `python.exe` and `python3.exe`.
+4. **Close and reopen PowerShell.** PATH changes only apply to
+   new terminal sessions.
+5. Re-run `python --version` — it should now show your installed
+   Python.
+
+If the alias is disabled but `python` still doesn't work, the
+`py` launcher is a backup that points to your real Python install:
+
+```powershell
+py --version
+py -m pip --version
+```
+
+If `py` works but `python` doesn't, the alias is probably still
+intercepting — re-check the App execution aliases setting.
+
 ### Step 2: Install Git (if not already present)
 
 The beamline workstation may already have Git. Check first:
@@ -68,7 +110,28 @@ git --version
 
 If you get a version number, skip ahead to Step 3.
 
-If not, download Git for Windows from
+If not, you have two options to install Git:
+
+**Option A — winget (faster, if available).** Modern Windows 10/11
+includes the `winget` package manager. Check if you have it:
+
+```powershell
+winget --version
+```
+
+If it prints a version, install Git in one command:
+
+```powershell
+winget install --id Git.Git -e --source winget
+```
+
+Close PowerShell, open a new window, then verify:
+
+```powershell
+git --version
+```
+
+**Option B — manual download.** Download Git for Windows from
 [git-scm.com](https://git-scm.com/download/win). Use default
 installer settings. After install, verify in a **new** PowerShell
 window:
@@ -120,15 +183,25 @@ allows scripts to run for your current user only):
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 ```
 
-Then activate again. Once activated, you should see `(venv)` at
-the start of your prompt.
+Then activate again. Once activated, **your prompt should now
+start with `(venv)`**, like this:
+
+```text
+(venv) PS C:\Users\you\AstraXAS>
+```
+
+If you don't see `(venv)` at the start of your prompt, activation
+failed — re-check the command above and the execution policy.
+Every new PowerShell window needs activation again; the `(venv)`
+prefix is your visual confirmation that you're working inside
+the AstraXAS environment.
 
 ### Step 5: Install AstraXAS
 
 With the venv activated:
 
 ```powershell
-pip install --upgrade pip
+python -m pip install --upgrade pip
 pip install -e ".[dev]"
 ```
 
