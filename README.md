@@ -11,7 +11,7 @@ AstraXAS provides automated workflows for X-ray absorption spectroscopy (XAS) pr
 - **Automatic foil drift correction** — aligns each scan to a reference foil (inline I₂ or separate foil files) using derivative-shape matching, a coarse global grid search, and local refinement
 - **Alignment quality scoring** — reports a Pearson-r quality score for every alignment and warns when scans fall below a configurable quality threshold
 - **Merge-then-normalize workflow** — averages raw μ(E) replicates first, then applies normalization once to the merged spectrum, following common Athena-style XAS preprocessing practice
-- **Athena-compatible normalization** — uses Larch's `pre_edge` with full control over pre-edge range, normalization range, polynomial order, and E₀
+- **Athena-comparable normalization** — uses Larch's `pre_edge` with the same conceptual parameters as Athena (pre-edge range, normalization range, polynomial order, E₀). Numerical results are typically very close but are not byte-identical to Athena; see Known Limitations.
 - **Three analysis modes** — fluorescence (`IF/I0`), transmission (`ln(I0/I1)`), and reference (`ln(I1/I2)`)
 - **Two alignment sources** — inline reference channel (I₂ measured in every scan) or separate foil files identified by a filename keyword
 - **Pre-merge deglitching** — optional automatic interpolation of narrow detector spikes and manual range interpolation for broader inspected artifacts
@@ -84,8 +84,10 @@ python -m astra_xas.gui
 ### Command line
 
 ```bash
-python -m astra_xas.cli /path/to/xasd/folder --mode fluo --e0 7121.030
+astra-xas /path/to/xasd/folder --mode fluo --e0 7121.030
 ```
+
+The `astra-xas` console command is installed by `pip install -e .` (see Installation). `python -m astra_xas.cli ...` continues to work as an alternate invocation.
 
 Use a JSON config file for parameters not exposed as individual CLI flags (pre-edge windows, alignment window, detector thresholds, etc.):
 
@@ -101,9 +103,12 @@ Options:
 |---|---|---|
 | `input_dir` | required | Folder containing `.xasd` files |
 | `-o`, `--output-dir` | `<input>-processed` | Output folder |
-| `--mode` | `fluo` | Sample signal: `fluo`, `trans`, or `ref` |
-| `--foil-mode` | `trans` | Foil alignment signal: `trans`, `ref`, or `fluo` |
-| `--e0` | `7121.030` | Edge energy in eV |
+| `-c`, `--config` | `None` | Path to JSON config file (see Configuration) |
+| `--mode` | `fluo`* | Sample signal: `fluo`, `trans`, or `ref` |
+| `--foil-mode` | `trans`* | Foil alignment signal: `trans`, `ref`, or `fluo` |
+| `--e0` | `7121.030`* | Edge energy in eV |
+
+\* The asterisked flags fall back to `AstraConfig` defaults (or the config-file values, if `--config` is provided) when not set explicitly. Explicit CLI flags always win over config-file values, which always win over defaults.
 
 ### Python API
 
@@ -171,6 +176,13 @@ AstraXAS supports two alignment sources:
 
 - `inline_ref` uses the reference channel (`ln(I1/I2)`) measured in each sample scan. The first sample scan is the zero-shift reference.
 - `separate_foil` uses files whose names contain `foil_keyword` as reference foil scans. The first foil scan is the zero-shift reference, and each sample inherits the shift and quality of its most recent assigned foil scan.
+
+**Choosing the alignment source.** The choice depends on your beamline setup:
+
+- Use `inline_ref` when each scan includes a reference channel — typically a third ion chamber after the second sample, measured simultaneously with the sample. This is the standard configuration for *operando* electrochemistry and any setup where pausing the experiment to collect a separate foil scan is impractical.
+- Use `separate_foil` when foil reference scans are collected as separate files (e.g., a copper foil scan run at the start of each sample series). The watcher and offline CLI identify these files by the `foil_keyword` substring in their filename (default `"foil"`).
+
+The `AstraConfig` default is `separate_foil`. If your data has no files matching the foil keyword, AstraXAS will raise `RuntimeError: No foil files found`. Set `alignment_source = "inline_ref"` (in your JSON config or via the GUI/Python API) to use the per-scan reference channel instead.
 
 By default, `alignment_anchor_mode="first_scan"` preserves this behavior. To compare multiple folders against the same internal reference, set `alignment_anchor_mode="selected_file"` and provide `alignment_anchor_path` pointing to a `.xasd` scan. The selected anchor file is loaded, validated, and used as the zero-shift alignment anchor for all scans in the folder. This separates the alignment source (`inline_ref` or `separate_foil`) from the alignment anchor (the file that defines zero shift).
 
@@ -267,13 +279,13 @@ This preview does not provide a GUI panel, foil drift correction, cross-scan ali
 Start a watch session with:
 
 ```bash
-python -m astra_xas.beamtime watch /path/to/incoming
+astra-xas-beamtime watch /path/to/incoming
 ```
 
 For longer beamtime sessions, pass `--log-file PATH` or `-l PATH` to mirror stdout to a persistent file. The file is opened in append mode and line-buffered, so you can `tail -f` it in real time during the experiment. Each line is prefixed with an ISO timestamp:
 
 ```bash
-python -m astra_xas.beamtime watch /data/incoming \
+astra-xas-beamtime watch /data/incoming \
     -c configs/p_k.json \
     -l ~/beamtime_logs/2026-05-15.log
 ```
@@ -301,10 +313,74 @@ for i in range(1, 6):
 Then edit `examples/scenarios/clean_replay.yaml` to point `source_dir` at that folder and run:
 
 ```bash
-python -m astra_xas.beamtime replay examples/scenarios/clean_replay.yaml
+astra-xas-beamtime replay examples/scenarios/clean_replay.yaml
 ```
 
 The package does not ship example `.xasd` files. The synthetic generator is a software test fixture only; it is not physically accurate and should not be used as a reference spectrum.
+
+---
+
+## Validation on real data
+
+The case studies below use two real datasets processed end-to-end with AstraXAS in offline mode. They illustrate complementary aspects of the tool: the Fe K-edge dataset shows clean output on a well-controlled operando experiment, while the Si K-edge dataset shows how the QC system behaves on chemically distant samples and on data containing real instrumental artifacts.
+
+The two datasets demonstrate different stages of the pipeline. For Fe K-edge, the accessible post-edge range (~150 eV past the edge) supports clean normalization, so the Fe K case studies show normalized output. Si K-edge data has an intrinsically narrow accessible post-edge range (~45 eV), which makes polynomial normalization to a flat post-edge unreliable for any tool — Si K data is challenging to normalize reproducibly even by hand. The Si K case studies therefore show processed μ(E) (merged, aligned, deglitched) before normalization, where the alignment and replicate-consistency story can be evaluated cleanly without being confounded by limited-range normalization artifacts.
+
+### Fe K-edge — clean baseline on operando electrocatalysis data
+
+The Fe K dataset is from an operando electrocatalysis experiment on sample S3 at varying applied potentials in CO₂ and Ar atmospheres (26 scans across 9 sample groups, with 6 reference Fe foil scans). Processing used `alignment_source = separate_foil` with a selected anchor foil scan. All 26 scans aligned reliably (Pearson-r quality ≥ 0.7); none were flagged as low-quality. The drift tracker records a small systematic energy drift of ~0.15 eV across the session, well within the ±2 eV safety bound:
+
+![Fe K drift tracker, 26 scans](assets/validation_fe_k/drift_tracker.png)
+
+*Figure: per-scan energy shift drift tracker for the Fe K-edge dataset. The smooth ~0.15 eV downward drift across scan indices is real beamline drift over the course of the experiment, tracked cleanly by the alignment routine.*
+
+The merge-then-normalize workflow produces a normalized overview where all nine operando states overlay tightly through the edge rise (7110–7125 eV). The post-edge settles cleanly to 1.0 with visible EXAFS-like oscillations preserved in the 7150–7250 eV range. Subtle but real variation in the white-line and post-edge regions reflects actual chemistry differences between potentials and atmospheres rather than noise:
+
+![Fe K normalized overview, 9 operando states](assets/validation_fe_k/normalized_overview.png)
+
+A representative replicate QC plot (Run51_S3 at open circuit in CO₂, three replicates) shows tight scan-to-scan agreement through the entire range, with the merged average tracking the replicate envelope faithfully through the edge, white-line, and EXAFS region:
+
+![Fe K replicate QC for Run51](assets/validation_fe_k/Run51_S3_OC_CO2_normalized_replicate_qc.png)
+
+In addition to the normalized outputs, this dataset triggered the self-absorption diagnostic: three Ar-atmosphere groups (Run59, Run60, Run62) were flagged with strong-severity ratios (0.19, 0.25, 0.43 — well below the `normal` threshold of 0.85). The flagged groups are recorded in `ASTRA_self_absorption_flags.dat` with amplitudes, ratios, and severity classifications. The diagnostic does not modify the spectra; flagged groups should be inspected manually before quantitative interpretation.
+
+### Si K-edge — QC behavior on chemically distinct samples
+
+The Si K dataset (46 scans, 19 groups, `alignment_source = inline_ref`) mixes synthesized samples (CC and OL series) with reference materials (Diatomite, Olivine, Silica Gel, MK Sigma, SiO₂ Sigma). Si K-edge data is intrinsically more challenging than Fe K-edge: low photon energies, higher absorption, harder sample preparation, and a narrow accessible post-edge range. This dataset stresses the QC system rather than producing publication-grade normalized spectra.
+
+The drift tracker for the Si K dataset tells a different story from the Fe K one. Forty-two scans aligned reliably, but four scans (Olivine ×2 and Silica Gel ×2) were flagged with low alignment quality (0.25 to 0.59, all below the 0.70 warning threshold). All flagged scans remained within the ±2 eV safety bound and stayed in the analysis with a warning rather than being auto-rejected:
+
+![Si K drift tracker, 46 scans, 4 flagged](assets/validation_si_k/drift_tracker.png)
+
+*Figure: filled blue circles are reliable alignments (quality ≥ 0.70); open red circles are low-quality alignments (quality < 0.70). The four flagged scans cluster between scan indices 40–43.*
+
+#### Case study: alignment of chemically distinct samples
+
+The Olivine alignment was flagged with quality 0.25. The figure below shows why. AstraXAS aligns spectra by matching the *derivative* shape of the alignment signal inside the alignment window. The reference (CC1_60C, blue) shows a single sharp derivative peak around 1846 eV. Olivine (red) shows a different derivative shape: broader, multi-peak structure that reflects its magnesium-silicate chemistry rather than a calibration error.
+
+![Olivine vs CC1 derivative shapes](assets/validation_si_k/Olivine_alignment_problem_catch.png)
+
+Cross-correlating those two derivatives gives a low-confidence shift estimate. AstraXAS records this as low alignment quality, prints a warning, and continues processing — the user decides whether to include or exclude the flagged scans.
+
+The Olivine data itself is fine. The two replicates overlay essentially perfectly when their internal alignment is checked (processed μ(E) before normalization, showing the multi-peak white-line structure characteristic of olivine):
+
+![Olivine processed μ(E) replicate QC](assets/validation_si_k/Olivine_Si_K_edge_XANES_processed_mu_replicate_qc.png)
+
+The takeaway: low alignment quality does not necessarily mean bad data. It often means the sample is chemically too distant from the alignment anchor for derivative-matching to give a confident shift. When this happens, recommended actions are:
+
+- Use a chemically closer reference scan as the alignment anchor by setting `alignment_anchor_mode = "selected_file"` and `alignment_anchor_path` to a representative scan of the same or similar material.
+- Inspect the flagged group's replicate QC plot to confirm internal consistency.
+- Document the flag in the analysis notes; a low-quality alignment warning is a meaningful piece of QC metadata, not a hidden failure.
+
+#### Case study: automatic deglitching of narrow artifacts
+
+Ten Diatomite XANES scans contained narrow spikes near 1859 eV, likely a beamline monochromator artifact. AstraXAS detected and auto-interpolated 47 single-point excursions across these scans. Every interpolation was logged in `Diatomite_XANES_deglitch_log.dat`, including the affected scan, the deglitch method, and the interpolated energy positions, so the correction is traceable.
+
+The processed μ(E) replicate QC plot shows ten Diatomite replicates after deglitching: the spikes are gone, post-deglitch consistency is good, and the group average tracks the bulk of replicates closely. The vertical spread between replicates reflects real beam-stability variation across the ten-scan series, which is preserved by the merge step rather than smoothed away:
+
+![Diatomite processed μ(E) replicate QC](assets/validation_si_k/Diatomite_XANES_processed_mu_replicate_qc.png)
+
+Automatic deglitching is intentionally conservative — it only targets narrow, point-like excursions. Broader artifacts (multi-point distortions, beamline disturbances spanning several eV) should be handled with manual range deglitching, which is also logged.
 
 ---
 
@@ -607,6 +683,32 @@ Save a config file for each edge (Fe K, Cu K, etc.) and load it at the start of 
 | Interactive spectrum viewer | ✓ | Limited | ✅ With session save |
 | Publication figure export | ✓ | ✓ | ✅ PNG / PDF / SVG |
 | EXAFS fitting | ✓ (Artemis) | Limited | Planned |
+
+---
+
+## Known limitations
+
+AstraXAS is being actively stabilized. Users should be aware of the following constraints and design choices:
+
+- **Beamline scope.** AstraXAS is currently developed and tested primarily on ASTRA / SOLARIS `.xasd` data. Other beamlines work only when their detector channels and energy-resolved scan formats match the expectations of `astra_xas.io.load_xasd` (a multi-column header-prefixed text format with energy plus at least seven detector channels).
+
+- **Beamtime Mode is preview, not final processing.** The watcher performs live per-scan QC and live group merge-normalize, but it does not currently apply foil drift correction, cross-scan alignment, or full validation. Final scientific processing should use the offline `process_folder()` pipeline (or the `astra-xas` CLI), which provides the complete feature set.
+
+- **Alignment quality is comparison-based.** A low alignment quality score does not mean the data is bad — it means the scan is chemically distant from the alignment anchor and derivative matching gives a low-confidence shift. The Validation case studies above show this in practice. Choose alignment anchors with similar chemistry where possible.
+
+- **Edge presets are starting templates, not absolute calibration.** The bundled edge presets provide approximate E₀, pre-edge, normalization, and alignment windows for common edges. Users must verify and adjust these against their own data before publication. AstraXAS does not perform absolute energy calibration; absolute calibration depends on the alignment anchor itself being externally calibrated.
+
+- **Self-absorption diagnostic is a heuristic flag, not a correction.** The fluorescence/transmission white-line amplitude ratio compares relative shapes; it does not compute a corrected μ(E). Flagged groups should be reviewed manually before interpretation.
+
+- **Automatic deglitching is for narrow point-like spikes only.** Broader artifacts must be handled with manual range deglitching, which is intentionally not automatic to avoid silently distorting spectral features.
+
+- **Athena-comparable, not Athena-byte-identical.** AstraXAS uses Larch's `pre_edge` for normalization, with the same conceptual parameters as Athena (pre-edge range, normalization range, polynomial order, E₀). Numerical results are typically very close to Athena's defaults but are not byte-identical because alignment, deglitching, replicate merging, and outlier filtering happen in AstraXAS's pipeline. A formal side-by-side comparison on real datasets is planned.
+
+- **Low-energy edges have limited normalization range.** Edges below ~3 keV (e.g., Si K, P K, S K) have a narrow accessible post-edge range, which constrains polynomial normalization quality. The Si K case study in the Validation section illustrates this. For low-energy edges, processed μ(E) (pre-normalization) is often the more reproducible deliverable.
+
+- **Test coverage is uneven.** Beamtime Mode is well-tested (Phase 1–4 plus log-file tee). The offline `process_folder` pipeline is currently validated by real-data case studies (see Validation section) rather than automated tests. Comprehensive pytest coverage of the offline pipeline is planned.
+
+- **No formal release on PyPI yet.** Install from source via `pip install -e .` until a tagged release.
 
 ---
 
