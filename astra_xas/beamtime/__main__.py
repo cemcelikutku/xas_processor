@@ -2,34 +2,17 @@ from __future__ import annotations
 
 import argparse
 import builtins
-import json
 import signal
 import threading
-from dataclasses import fields
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, IO
 
+from astra_xas._config_utils import load_config_json
 from astra_xas.config import AstraConfig
 
 from .replay import replay
 from .watcher import watch
-
-
-def load_config_json(path: Path) -> AstraConfig:
-    path = Path(path).expanduser()
-    with path.open("r", encoding="utf-8") as f:
-        data = json.load(f)
-    if not isinstance(data, dict):
-        raise ValueError("Config JSON must contain an object.")
-    allowed = {field.name for field in fields(AstraConfig)}
-    unknown = sorted(set(data) - allowed)
-    if unknown:
-        raise ValueError(f"Unknown AstraConfig field(s): {', '.join(unknown)}")
-    config = AstraConfig()
-    for key, value in data.items():
-        setattr(config, key, value)
-    return config
 
 
 def make_tee_log(

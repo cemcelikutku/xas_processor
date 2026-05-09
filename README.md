@@ -87,6 +87,14 @@ python -m astra_xas.gui
 python -m astra_xas.cli /path/to/xasd/folder --mode fluo --e0 7121.030
 ```
 
+Use a JSON config file for parameters not exposed as individual CLI flags (pre-edge windows, alignment window, detector thresholds, etc.):
+
+```bash
+astra-xas /path/to/data --config configs/p_k.json
+```
+
+Explicit CLI flags override config file values, which in turn override AstraConfig defaults.
+
 Options:
 
 | Flag | Default | Description |

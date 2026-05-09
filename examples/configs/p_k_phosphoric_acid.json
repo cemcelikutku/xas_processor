@@ -1,5 +1,6 @@
 {
   "analysis_mode": "fluo",
+  "alignment_source": "inline_ref",
   "e0": 2145.5,
   "pre1": -60.0,
   "pre2": -15.0,
