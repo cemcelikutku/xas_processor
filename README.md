@@ -33,35 +33,43 @@ AstraXAS provides automated workflows for X-ray absorption spectroscopy (XAS) pr
 
 ## Installation
 
-AstraXAS requires Python 3.10+.
+AstraXAS requires Python 3.10 or newer.
 
-Clone the repository:
+### From source (recommended for now)
 
 ```bash
 git clone https://github.com/cemcelikutku/AstraXAS.git
 cd AstraXAS
+pip install -e .
 ```
 
-Install the required Python dependencies manually:
+The `-e` flag installs in editable mode, so `git pull` updates the package without reinstalling.
 
-```bash
-pip install numpy scipy matplotlib xraylarch reportlab watchdog PyYAML
-```
-
-On Ubuntu, `tkinter` may need to be installed separately:
+On Ubuntu/Debian, the GUI may also require Tkinter from the system package manager:
 
 ```bash
 sudo apt install python3-tk
 ```
 
-**Main dependencies:**
+Tkinter is not a normal pip dependency on most Linux distributions, so this step is independent of the pip install above.
 
-- `numpy`, `scipy` — signal processing and alignment
-- `xraylarch` — `pre_edge` normalization (Athena-compatible)
-- `matplotlib` — automatic and interactive plots
-- `reportlab` — optional PDF QC report generation
-- `watchdog`, `PyYAML` — Beamtime Mode folder watching and replay scenarios
-- `tkinter` — GUI toolkit
+### Verify the install
+
+```bash
+astra-xas --help
+astra-xas-beamtime --help
+```
+
+Both commands should print argparse help text without errors.
+
+### For development and testing
+
+```bash
+pip install -e ".[dev]"
+pytest
+```
+
+All existing tests should pass.
 
 ---
 

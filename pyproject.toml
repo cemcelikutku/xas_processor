@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "astra-xas"
+version = "0.4.1"
+description = "QC-first XAS preprocessing toolkit with live beamtime mode"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Cem Celikutku"}
+]
+keywords = ["xas", "exafs", "xanes", "synchrotron", "beamtime", "spectroscopy"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Scientific/Engineering :: Chemistry",
+]
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "matplotlib>=3.7",
+    "xraylarch>=0.9.70",
+    "reportlab>=4.0",
+    "watchdog>=3.0",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/cemcelikutku/AstraXAS"
+Issues = "https://github.com/cemcelikutku/AstraXAS/issues"
+Repository = "https://github.com/cemcelikutku/AstraXAS"
+
+[project.scripts]
+astra-xas = "astra_xas.cli:main"
+astra-xas-beamtime = "astra_xas.beamtime.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["astra_xas*"]
+exclude = ["tests*", "examples*"]

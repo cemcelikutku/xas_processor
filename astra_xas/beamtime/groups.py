@@ -132,7 +132,6 @@ def merge_and_normalize_group(
         "mu_avg": mu_avg,
         "norm": np.asarray(pe["norm"], dtype=float),
         "flat": np.asarray(pe["flat"], dtype=float),
-        "bkgcorr": np.asarray(pe["bkgcorr"], dtype=float),
         "edge_step": float(pe["edge_step"]),
         "e0": float(pe["e0"]),
         "n_used": len(replicate_signals),

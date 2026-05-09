@@ -1,7 +1,7 @@
-numpy
-scipy
-matplotlib
-xraylarch
-reportlab
-watchdog
-PyYAML
+numpy>=1.24
+scipy>=1.10
+matplotlib>=3.7
+xraylarch>=0.9.70
+reportlab>=4.0
+watchdog>=3.0
+PyYAML>=6.0
