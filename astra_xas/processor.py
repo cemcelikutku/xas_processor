@@ -1744,8 +1744,20 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
         foil_entries = [e for e in entries if e["is_foil"]]
         if not foil_entries:
             raise RuntimeError(
-                f"No foil files found. Put '{config.foil_keyword}' in foil filenames "
-                f"or change foil_keyword."
+                "No foil files found. AstraXAS expected one or more files whose "
+                f"names contain the foil_keyword (currently '{config.foil_keyword}') "
+                "because alignment_source is 'separate_foil'.\n"
+                "\n"
+                "Possible fixes:\n"
+                "  1. If your data includes a reference channel measured in every "
+                "scan (typical for operando setups), set "
+                "alignment_source = 'inline_ref' in your config or via the "
+                "GUI/Python API.\n"
+                "  2. If your foil scans use a different filename keyword "
+                "(e.g., 'reference' or the element name), change foil_keyword "
+                "in your config.\n"
+                "  3. If you intended to include foil scans but forgot, add them "
+                "to the input folder."
             )
         first_foil = foil_entries[0]
         if selected_anchor_entry is None:

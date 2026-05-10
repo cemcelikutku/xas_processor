@@ -1,9 +1,10 @@
 from dataclasses import dataclass
 from pathlib import Path
+from astra_xas._version import __version__
 
 @dataclass
 class AstraConfig:
-    version: str = "ASTRA XAS Processor 0.1.0"
+    version: str = f"ASTRA XAS Processor {__version__}"
     foil_keyword: str = "foil"
     analysis_mode: str = "fluo"      # fluo, trans, ref
     alignment_source: str = "separate_foil"  # separate_foil, inline_ref
