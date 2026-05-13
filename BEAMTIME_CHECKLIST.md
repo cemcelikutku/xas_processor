@@ -11,7 +11,7 @@ synchrotron experiment. Designed to be readable when tired.
 - [ ] Confirm `xraylarch` and `watchdog` are installed in the
       Python environment you'll use
 - [ ] Identify which element(s) you'll be measuring and prepare
-      a config JSON for each (see `examples/configs/`)
+      a config JSON for each (see `configs/`)
 - [ ] Verify each config has correct `e0`, `align_window_min`,
       `align_window_max`, `pre1`/`pre2`/`norm1`/`norm2`, and
       `analysis_mode`

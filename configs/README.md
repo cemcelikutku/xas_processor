@@ -1,17 +1,15 @@
 # Beamtime configs
 
-Ready-to-use `AstraConfig` JSON files for specific beamtime experiments.
-Load with the `--config` flag (see "Usage" below) or via
-`astra_xas._config_utils.load_config_json` from Python.
+Pre-prepared AstraConfig JSON files for the upcoming K K-edge operando electrochemistry experiment at ASTRA/SOLARIS. These are ready-to-use templates without paired example data. For reproducible end-to-end examples with paired .xasd data files, see [examples/](../examples/).
 
 ## Available configs
 
-- **`k_k_operando_pd_foil.json`** — Potassium K-edge (3608.4 eV) XANES
+- **`k_k_operando_pd_foil.json`** — primary, separate_foil mode. Potassium K-edge (3608.4 eV) XANES
   in fluorescence mode at the ASTRA beamline (SOLARIS), with Pd foil
   scans in transmission used as the energy-drift reference. Intended
   for operando electrochemistry runs where applied potential varies
   between scans.
-- **`k_k_operando_inline_ref.json`** — alternate config for K K
+- **`k_k_operando_inline_ref.json`** — fallback, inline_ref mode. Alternate config for K K
   beamlines that measure an inline reference channel (I₁/I₂) during
   every sample scan instead of collecting separate foil scans. Use
   this when the beamline does NOT provide separate foil files and
