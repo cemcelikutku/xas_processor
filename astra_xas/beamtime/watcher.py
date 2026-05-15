@@ -64,24 +64,51 @@ def _write_checkpoint(path: Path, checkpoint: dict) -> None:
     os.replace(tmp, path)
 
 
-def _wait_size_stable(path: Path, log=print, timeout_s: float = 10.0) -> bool:
-    deadline = time.monotonic() + timeout_s
-    last_size = -1
+def wait_for_file_complete(
+    path: Path,
+    stability_seconds: int = 10,
+    poll_interval_seconds: int = 1,
+    max_wait_seconds: int = 600,
+    log=print,
+) -> bool:
+    path = Path(path)
+    started = time.monotonic()
+    deadline = started + max_wait_seconds
+    last_size: int | None = None
     stable_count = 0
-    while time.monotonic() < deadline:
+    detected = False
+    log(f"{_timestamp()} {path.name} waiting_for_file_complete max_wait={max_wait_seconds}s")
+
+    while time.monotonic() <= deadline:
         try:
             size = path.stat().st_size
         except OSError:
-            size = -1
-        if size > 0 and size == last_size:
-            stable_count += 1
-            if stable_count >= 2:
+            size = None
+
+        if size is not None and size > 0 and not detected:
+            detected = True
+            log(f"{_timestamp()} {path.name} first_size_detected size={size} bytes")
+
+        if size is not None and size > 0 and size == last_size:
+            stable_count += poll_interval_seconds
+            if stable_count >= stability_seconds:
+                elapsed = time.monotonic() - started
+                log(
+                    f"{_timestamp()} {path.name} file_size_stable "
+                    f"size={size} bytes stable_for={stable_count}s elapsed={elapsed:.1f}s"
+                )
                 return True
         else:
             stable_count = 0
+
         last_size = size
-        time.sleep(0.2)
-    log(f"WARNING: file did not settle within 10 s; skipped {path.name}")
+        time.sleep(poll_interval_seconds)
+
+    elapsed = time.monotonic() - started
+    log(
+        f"WARNING: {path.name} file_size_not_stable "
+        f"after {elapsed:.1f}s max_wait={max_wait_seconds}s"
+    )
     return False
 
 
@@ -142,6 +169,8 @@ def _process_scan(
     output_dir: Path,
     registry,
     registry_lock,
+    session_lock: threading.Lock | None = None,
+    dashboard_lock: threading.Lock | None = None,
     log=print,
 ) -> None:
     timestamp = _timestamp()
@@ -153,13 +182,25 @@ def _process_scan(
     entry = None
     pipeline_succeeded = False
 
-    try:
-        scan = load_xasd(path)
-    except Exception as exc:
+    def write_row(row: dict) -> None:
+        if session_lock is None:
+            append_session_row(session_log, row)
+            return
+        with session_lock:
+            append_session_row(session_log, row)
+
+    def update_dashboard() -> None:
+        if dashboard_lock is None:
+            render_dashboard(output_dir, log=log)
+            return
+        with dashboard_lock:
+            render_dashboard(output_dir, log=log)
+
+    wait_started = time.monotonic()
+    if not wait_for_file_complete(path, log=log):
         status = "reject"
-        notes = f"load_failed: {type(exc).__name__}: {exc}"
-        append_session_row(
-            session_log,
+        notes = "file_wait_timeout: file size did not stabilize within 600 seconds"
+        write_row(
             {
                 "timestamp_iso": timestamp,
                 "filename": filename,
@@ -170,8 +211,40 @@ def _process_scan(
             },
         )
         log(f"{timestamp} {filename} status={status} warns=0 jumps=0")
-        render_dashboard(output_dir, log=log)
+        update_dashboard()
         return
+    wait_elapsed = time.monotonic() - wait_started
+
+    try:
+        scan = load_xasd(path)
+    except Exception as first_exc:
+        log(
+            f"{_timestamp()} {filename} load_failed; retrying in 5s: "
+            f"{type(first_exc).__name__}: {first_exc}"
+        )
+        time.sleep(5)
+        try:
+            scan = load_xasd(path)
+        except Exception as exc:
+            status = "reject"
+            notes = (
+                f"file_wait: stable after {wait_elapsed:.1f}s; "
+                f"load_failed_after_retry: {type(exc).__name__}: {exc}"
+            )
+            write_row(
+                {
+                    "timestamp_iso": timestamp,
+                    "filename": filename,
+                    "status": status,
+                    "n_warnings": 0,
+                    "n_jumps": 0,
+                    "notes": notes,
+                },
+            )
+            log(f"{timestamp} {filename} status={status} warns=0 jumps=0")
+            update_dashboard()
+            return
+    log(f"{_timestamp()} {filename} parsed_after_file_wait elapsed={wait_elapsed:.1f}s")
 
     try:
         entry = _entry_from_scan(scan, config, path=path)
@@ -188,6 +261,7 @@ def _process_scan(
             notes_parts.append("fatal: " + " | ".join(fatal_errors))
         if warnings:
             notes_parts.append("warnings: " + " | ".join(warnings))
+        notes_parts.append(f"file_wait: stable after {wait_elapsed:.1f}s")
         notes = "; ".join(notes_parts)
         pipeline_succeeded = True
     except Exception as exc:
@@ -196,8 +270,7 @@ def _process_scan(
         warnings = []
         n_jumps = 0
 
-    append_session_row(
-        session_log,
+    write_row(
         {
             "timestamp_iso": timestamp,
             "filename": filename,
@@ -231,7 +304,7 @@ def _process_scan(
             registry_lock,
             log=log,
         )
-    render_dashboard(output_dir, log=log)
+    update_dashboard()
     log(f"{timestamp} {filename} status={status} warns={len(warnings)} jumps={n_jumps}")
 
 
@@ -272,6 +345,9 @@ def watch(
     registry: dict = {}
     registry_lock = threading.Lock()
     rows_written = 0
+    session_lock = threading.Lock()
+    dashboard_lock = threading.Lock()
+    checkpoint_lock = threading.Lock()
     restore_group_registry(output_dir, registry, registry_lock, log=log)
 
     def should_skip_checkpoint(path: Path) -> bool:
@@ -279,7 +355,8 @@ def watch(
             digest = _sha256_file(path)
         except OSError:
             return False
-        return checkpoint["processed"].get(path.name) == digest
+        with checkpoint_lock:
+            return checkpoint["processed"].get(path.name) == digest
 
     def enqueue(path: Path) -> None:
         path = Path(path)
@@ -313,11 +390,23 @@ def watch(
             except queue.Empty:
                 continue
             try:
-                if not should_skip_checkpoint(path) and _wait_size_stable(path, log=log):
-                    _process_scan(path, config, session_log, output_dir, registry, registry_lock, log=log)
+                if not should_skip_checkpoint(path):
+                    _process_scan(
+                        path,
+                        config,
+                        session_log,
+                        output_dir,
+                        registry,
+                        registry_lock,
+                        session_lock=session_lock,
+                        dashboard_lock=dashboard_lock,
+                        log=log,
+                    )
                     try:
-                        checkpoint["processed"][path.name] = _sha256_file(path)
-                        _write_checkpoint(checkpoint_path, checkpoint)
+                        digest = _sha256_file(path)
+                        with checkpoint_lock:
+                            checkpoint["processed"][path.name] = digest
+                            _write_checkpoint(checkpoint_path, checkpoint)
                     except OSError as exc:
                         log(f"WARNING: could not update checkpoint for {path.name}: {exc}")
                     with count_lock:
@@ -338,8 +427,13 @@ def watch(
             if not event.is_directory:
                 enqueue(Path(event.dest_path))
 
-    worker_thread = threading.Thread(target=worker, daemon=True)
-    worker_thread.start()
+    worker_count = max(1, min(8, max_files or 8))
+    worker_threads = [
+        threading.Thread(target=worker, daemon=True, name=f"astra-watch-worker-{i}")
+        for i in range(worker_count)
+    ]
+    for worker_thread in worker_threads:
+        worker_thread.start()
 
     incoming_dir.mkdir(parents=True, exist_ok=True)
     observer = Observer()
@@ -351,7 +445,8 @@ def watch(
 
     while not file_queue.empty() and not stop_event.is_set():
         time.sleep(0.1)
-    render_dashboard(output_dir, log=log)
+    with dashboard_lock:
+        render_dashboard(output_dir, log=log)
 
     try:
         while not stop_event.is_set():
@@ -368,5 +463,7 @@ def watch(
         while not file_queue.empty() and time.monotonic() < deadline:
             time.sleep(0.1)
         stop_event.set()
-        worker_thread.join(timeout=max(0.1, deadline - time.monotonic()))
-        write_session_ended_marker(session_log)
+        for worker_thread in worker_threads:
+            worker_thread.join(timeout=max(0.1, deadline - time.monotonic()))
+        with session_lock:
+            write_session_ended_marker(session_log)
