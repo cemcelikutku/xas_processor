@@ -30,6 +30,8 @@ SoftwareX paper describing AstraXAS's design and validation, submitted approxima
 
 ## Phase 1: Session manifest foundation
 
+**Status:** ✅ Complete (commits f0cebe0 Phase 1.1 module, b8152af Phase 1.2 offline pipeline integration)
+
 **Goal:** Introduce the session manifest concept as the central abstraction. Make the offline pipeline able to read manifests as input alongside the current "folder" mode.
 
 **Sub-tasks:**
@@ -52,6 +54,15 @@ SoftwareX paper describing AstraXAS's design and validation, submitted approxima
 **Why this phase first:** Defines the schema that Phase 2 will produce. Avoids designing Beamtime Mode in a way that's incompatible with offline consumption.
 
 ## Phase 2: Beamtime Mode rework
+
+**Status:** 🚧 In progress
+- ✅ Per-scan logic extracted into `single_scan.py` shared module (commits 90addad, 604d2c7, eb2064e)
+- ✅ Dashboard status reframed — detector jumps no longer drive `warn` (commit eb2064e)
+- ⏳ Robust file-completion handling (Option D refinement) — pending
+- ⏳ Comments support — pending
+- ⏳ Subdirectory handling — pending
+- ⏳ Structured live-mode outputs (incremental `ASTRA_detector_jumps.dat` etc.) — pending
+- ⏳ Manifest produced by watcher as session state — pending
 
 **Goal:** Refactor Beamtime Mode around the session manifest. Apply lessons from the SOLARIS beamtime: handle slow file writes properly, distinguish meaningful from noisy diagnostics, support comments and annotations.
 
@@ -76,6 +87,8 @@ SoftwareX paper describing AstraXAS's design and validation, submitted approxima
 
 ## Phase 3: Session curation UI
 
+**Status:** ⏳ Not started
+
 **Goal:** Make manifest editing accessible to non-technical users. The user shouldn't have to edit JSON by hand to mark scans as good or bad.
 
 **Sub-tasks:**
@@ -94,6 +107,8 @@ SoftwareX paper describing AstraXAS's design and validation, submitted approxima
 **Why this phase third:** Phases 1 and 2 produce a working system; Phase 3 makes it pleasant. Order matters — better to have curation work via manifest editing first, then add UI, than to design UI without a clear data model.
 
 ## Phase 4: Channel selection and analysis flexibility
+
+**Status:** ⏳ Not started
 
 **Goal:** Implement the beamline scientist's most thoughtful feature request — let users explicitly choose numerator and denominator channels for the analysis signal, Athena-style.
 
@@ -116,6 +131,8 @@ SoftwareX paper describing AstraXAS's design and validation, submitted approxima
 
 ## Phase 5: Interoperability outputs
 
+**Status:** ⏳ Not started
+
 **Goal:** Make AstraXAS outputs flow cleanly into the broader XAS tool ecosystem.
 
 **Sub-tasks:**
@@ -134,6 +151,8 @@ SoftwareX paper describing AstraXAS's design and validation, submitted approxima
 
 ## Phase 6: Detector deadtime correction
 
+**Status:** ⏳ Not started
+
 **Goal:** Implement deadtime correction for fluorescence detectors (the beamline scientist's request #2).
 
 **Sub-tasks:**
@@ -150,6 +169,8 @@ SoftwareX paper describing AstraXAS's design and validation, submitted approxima
 - Inactive by default; existing configs unaffected
 
 ## Phase 7: GUI integration for Beamtime Mode
+
+**Status:** ⏳ Not started
 
 **Goal:** Make Beamtime Mode accessible through the existing GUI (the beamline scientist's request #6).
 
@@ -215,8 +236,9 @@ The git history of this file serves as the development log of the project. Commi
 
 ## Current status
 
-- **Date:** 2026-05-15
+- **Date:** 2026-05-19
 - **Last beamtime:** SOLARIS K K-edge, May 13-14, 2026
 - **Current version:** v0.4.1
-- **Active phase:** Pre-Phase-1 (planning complete, implementation not yet started)
-- **Next milestone:** Phase 1 design document and initial implementation
+- **Active phase:** Phase 2 (Beamtime Mode rework) — mid-phase
+- **Last completed:** Phase 2.2 C — watcher uses shared per-scan API, status reframed (commit eb2064e)
+- **Next milestone:** Robust file-completion handling (Option D refinement) — addresses the SOLARIS race-condition bug
