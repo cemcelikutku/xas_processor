@@ -577,12 +577,33 @@ The previous element's groups stay in the dashboard (they're
 persisted to disk), and new scans use the new config. Use a
 different log file name so the two sessions don't get mixed up.
 
+### Beamtime QC status policy
+
+Beamtime Mode status is based on validation errors and warnings from
+the shared per-scan QC layer:
+
+- `ok`: no validation warnings or errors
+- `warn`: validation warnings are present
+- `reject`: fatal validation errors are present
+
+Detector jump records are still counted and shown in the session log
+(`n_jumps` column), but they no longer automatically turn a scan from
+`ok` to `warn`. This avoids over-warning near real spectral features
+(such as XANES edge features) while keeping jump diagnostics available
+for review.
+
+This policy applies to Beamtime Mode. The offline pipeline still
+reports detector jumps in its diagnostic outputs, but it does not use
+the live dashboard `ok` / `warn` / `reject` status display.
+
 ### When something looks wrong
 
-**Lots of `warn` status with high jump counts.** Usually fine.
-The detector-jump heuristic flags real instrumental noise that
-doesn't affect the science. If the merged spectrum looks right,
-ignore the warn.
+**A scan shows `warn` with a high `n_jumps`.** With the current
+policy, `warn` only fires on validation warnings, not on detector
+jumps. If you see both, the warn is from a validation issue; check
+the `notes` column to see which warning fired. A high `n_jumps`
+count on an otherwise `ok` scan usually reflects real spectral
+structure (XANES edge features etc.) and is informational only.
 
 **A scan rejected.** Check the session log:
 

@@ -9,14 +9,12 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-import numpy as np
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 from astra_xas.config import AstraConfig
 from astra_xas.io import load_xasd, natural_key
-from astra_xas.processor import _validate_processing_inputs
-from astra_xas.single_scan import _entry_from_scan, detect_detector_jumps
+from astra_xas.single_scan import process_single_scan
 
 from .dashboard import render_dashboard
 from .groups import restore_group_registry, update_group_with_entry
@@ -24,15 +22,8 @@ from .plots import render_per_scan_plot
 from .session import append_session_row, write_session_ended_marker
 
 
-RAW_CHANNELS = ("I0", "I1", "I2", "IF", "FDT")
-
-
 def _timestamp() -> str:
     return datetime.now().isoformat(timespec="seconds")
-
-
-def _validate_single_scan(entry, config):
-    return _validate_processing_inputs([entry], config)
 
 
 def _sha256_file(path: Path) -> str:
@@ -86,56 +77,6 @@ def _wait_size_stable(path: Path, log=print, timeout_s: float = 10.0) -> bool:
     return False
 
 
-def _add_derived_channels(channels: dict) -> None:
-    try:
-        i0 = channels.get("I0")
-        i1 = channels.get("I1")
-        i2 = channels.get("I2")
-        if_ = channels.get("IF")
-        if i0 is not None and if_ is not None:
-            i0 = np.asarray(i0, dtype=float)
-            if_ = np.asarray(if_, dtype=float)
-            with np.errstate(divide="ignore", invalid="ignore"):
-                channels["IF_over_I0"] = np.where(i0 > 0, if_ / i0, np.nan)
-        if i0 is not None and i1 is not None:
-            i0 = np.asarray(i0, dtype=float)
-            i1 = np.asarray(i1, dtype=float)
-            with np.errstate(divide="ignore", invalid="ignore"):
-                channels["ln_I0_I1"] = np.where(i1 > 0, np.log(i0 / i1), np.nan)
-        if i1 is not None and i2 is not None:
-            i1 = np.asarray(i1, dtype=float)
-            i2 = np.asarray(i2, dtype=float)
-            with np.errstate(divide="ignore", invalid="ignore"):
-                channels["ln_I1_I2"] = np.where(i2 > 0, np.log(i1 / i2), np.nan)
-    except Exception:
-        return
-
-
-def _count_detector_jumps(entry: dict, config: AstraConfig) -> int:
-    channels = {name: entry.get(name) for name in RAW_CHANNELS}
-    _add_derived_channels(channels)
-    n_jumps = 0
-    energy = entry.get("energy")
-    for name, values in channels.items():
-        if values is None:
-            continue
-        try:
-            arr = np.asarray(values, dtype=float)
-        except Exception:
-            continue
-        if not np.isfinite(arr).any():
-            continue
-        records = detect_detector_jumps(
-            energy,
-            arr,
-            name,
-            config,
-            entry.get("filename", "unknown"),
-        )
-        n_jumps += len(records)
-    return n_jumps
-
-
 def _process_scan(
     path: Path,
     config: AstraConfig,
@@ -147,12 +88,6 @@ def _process_scan(
 ) -> None:
     timestamp = _timestamp()
     filename = path.name
-    warnings: list[str] = []
-    fatal_errors: list[str] = []
-    n_jumps = 0
-    notes = ""
-    entry = None
-    pipeline_succeeded = False
 
     try:
         scan = load_xasd(path)
@@ -175,27 +110,38 @@ def _process_scan(
         return
 
     try:
-        entry = _entry_from_scan(scan, config, path=path)
-        warnings, fatal_errors = _validate_single_scan(entry, config)
-        n_jumps = _count_detector_jumps(entry, config)
-        if fatal_errors:
-            status = "reject"
-        elif warnings or n_jumps:
-            status = "warn"
-        else:
-            status = "ok"
-        notes_parts = []
-        if fatal_errors:
-            notes_parts.append("fatal: " + " | ".join(fatal_errors))
-        if warnings:
-            notes_parts.append("warnings: " + " | ".join(warnings))
-        notes = "; ".join(notes_parts)
-        pipeline_succeeded = True
+        result = process_single_scan(scan, config)
     except Exception as exc:
         status = "reject"
         notes = f"pipeline_failed: {type(exc).__name__}: {exc}"
-        warnings = []
-        n_jumps = 0
+        append_session_row(
+            session_log,
+            {
+                "timestamp_iso": timestamp,
+                "filename": filename,
+                "status": status,
+                "n_warnings": 0,
+                "n_jumps": 0,
+                "notes": notes,
+            },
+        )
+        log(f"{timestamp} {filename} status={status} warns=0 jumps=0")
+        render_dashboard(output_dir, log=log)
+        return
+
+    status = result.qc_status
+    warnings = result.qc_warnings
+    fatal_errors = result.qc_errors
+    n_jumps = int(result.metrics["n_detector_jumps"])
+    n_warnings = len(warnings)
+    entry = result.entry
+
+    notes_parts: list[str] = []
+    if fatal_errors:
+        notes_parts.append("fatal: " + " | ".join(fatal_errors))
+    if warnings:
+        notes_parts.append("warnings: " + " | ".join(warnings))
+    notes = "; ".join(notes_parts)
 
     append_session_row(
         session_log,
@@ -203,25 +149,25 @@ def _process_scan(
             "timestamp_iso": timestamp,
             "filename": filename,
             "status": status,
-            "n_warnings": len(warnings),
+            "n_warnings": n_warnings,
             "n_jumps": n_jumps,
             "notes": notes,
         },
     )
-    if pipeline_succeeded:
-        plot_path = output_dir / "plots" / "beamtime" / f"{Path(filename).stem}.png"
-        plot_path.parent.mkdir(parents=True, exist_ok=True)
-        render_per_scan_plot(
-            entry,
-            config,
-            status,
-            len(warnings),
-            n_jumps,
-            timestamp,
-            plot_path,
-            log=log,
-        )
-    if entry is not None and status in {"ok", "warn"}:
+
+    plot_path = output_dir / "plots" / "beamtime" / f"{Path(filename).stem}.png"
+    plot_path.parent.mkdir(parents=True, exist_ok=True)
+    render_per_scan_plot(
+        entry,
+        config,
+        status,
+        n_warnings,
+        n_jumps,
+        timestamp,
+        plot_path,
+        log=log,
+    )
+    if status in {"ok", "warn"}:
         update_group_with_entry(
             entry,
             path,
@@ -233,7 +179,7 @@ def _process_scan(
             log=log,
         )
     render_dashboard(output_dir, log=log)
-    log(f"{timestamp} {filename} status={status} warns={len(warnings)} jumps={n_jumps}")
+    log(f"{timestamp} {filename} status={status} warns={n_warnings} jumps={n_jumps}")
 
 
 def watch(
