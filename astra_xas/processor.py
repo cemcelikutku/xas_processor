@@ -26,6 +26,28 @@ from .self_absorption import (
     write_self_absorption_flags,
 )
 
+# Phase 2.1 compatibility re-exports. Removed in Phase 2.2 when consumers
+# (beamtime/watcher.py, beamtime/groups.py) migrate to importing directly
+# from astra_xas.single_scan.
+from .single_scan import (
+    SingleScanResult,
+    process_single_scan,
+    _entry_from_scan,
+    _analysis_signal_spec,
+    _alignment_signal_spec,
+    _required_channels_for_signal,
+    _range_overlap_status,
+    _channel_validation_messages,
+    _alignment_structure_warning,
+    detect_detector_jumps,
+    _config_bool,
+    _config_float,
+    RAW_DETECTOR_JUMP_CHANNELS,
+    PRIMARY_DETECTOR_JUMP_CHANNELS,
+    FDT_DETECTOR_JUMP_CHANNELS,
+    DERIVED_DETECTOR_JUMP_CHANNELS,
+)
+
 
 AUTO_DEGLITCH_WARNING = (
     "Automatic deglitching is intended for narrow point-like spikes. "
@@ -36,29 +58,11 @@ SHIFT_CONVENTION = (
     "positive shift_eV means +shift_eV is added to the scan energy before "
     "interpolation/averaging; shifts are relative to the alignment anchor."
 )
-PRIMARY_DETECTOR_JUMP_CHANNELS = {"I0", "I1", "I2", "IF"}
-FDT_DETECTOR_JUMP_CHANNELS = {"FDT"}
-RAW_DETECTOR_JUMP_CHANNELS = PRIMARY_DETECTOR_JUMP_CHANNELS | FDT_DETECTOR_JUMP_CHANNELS
-DERIVED_DETECTOR_JUMP_CHANNELS = {"IF_over_I0", "ln_I0_I1", "ln_I1_I2"}
 
 
 def interpolate_to_grid(E_source, mu_source, E_target, kind="linear"):
     f = interp1d(E_source, mu_source, kind=kind, bounds_error=False, fill_value=np.nan)
     return f(E_target)
-
-
-def _config_bool(config, name: str, default: bool = False) -> bool:
-    value = getattr(config, name, default)
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    return bool(value)
-
-
-def _config_float(config, name: str, default: float) -> float:
-    try:
-        return float(getattr(config, name, default))
-    except (TypeError, ValueError):
-        return float(default)
 
 
 def _relative_output_path(path: str | Path, output_dir: Path) -> str:
@@ -124,116 +128,6 @@ def _detector_health_channels(config: AstraConfig, records: list[dict]) -> list[
     if mode != "ref" and _records_have_channel(records, "mu_ref"):
         channels.append(("mu_ref", "ln(I1/I2)"))
     return channels
-
-
-def _analysis_signal_spec(config: AstraConfig) -> tuple[str, str]:
-    mode = getattr(config, "analysis_mode", "fluo")
-    if mode == "trans":
-        return "mu_trans", "ln(I0/I1)"
-    if mode == "ref":
-        return "mu_ref", "ln(I1/I2)"
-    return "mu_fluo", "IF/I0"
-
-
-def _alignment_signal_spec(alignment_source: str, config: AstraConfig) -> tuple[str, str, str]:
-    mode = "ref" if alignment_source == "inline_ref" else getattr(config, "foil_alignment_mode", "trans")
-    mapping = {
-        "trans": ("mu_trans", "ln(I0/I1)"),
-        "ref": ("mu_ref", "ln(I1/I2)"),
-        "fluo": ("mu_fluo", "IF/I0"),
-    }
-    signal_key, signal_label = mapping.get(mode, mapping["trans"])
-    return mode, signal_key, signal_label
-
-
-def _required_channels_for_signal(mode: str) -> list[tuple[str, str]]:
-    if mode == "trans":
-        return [("I0", "I0"), ("I1", "I1")]
-    if mode == "ref":
-        return [("I1", "I1"), ("I2", "I2")]
-    return [("IF", "IF"), ("I0", "I0")]
-
-
-def _range_overlap_status(name: str, selected_range: tuple[float, float], data_range: tuple[float, float]) -> str | None:
-    lo, hi = sorted((float(selected_range[0]), float(selected_range[1])))
-    data_lo, data_hi = data_range
-    if hi < data_lo or lo > data_hi:
-        return (
-            f"{name} {lo:.6g}-{hi:.6g} eV does not overlap data energy range "
-            f"{data_lo:.6g}-{data_hi:.6g} eV."
-        )
-    if lo < data_lo or hi > data_hi:
-        return (
-            f"{name} {lo:.6g}-{hi:.6g} eV only partially overlaps data energy range "
-            f"{data_lo:.6g}-{data_hi:.6g} eV."
-        )
-    return None
-
-
-def _channel_validation_messages(entry: dict, key: str, label: str, require_positive: bool = False) -> tuple[list[str], list[str]]:
-    fatal_errors = []
-    warnings_out = []
-    values = entry.get(key)
-    filename = entry.get("filename", "unknown")
-    if values is None:
-        fatal_errors.append(f"{filename}: required channel {label} is missing.")
-        return fatal_errors, warnings_out
-
-    values = np.asarray(values, dtype=float)
-    finite = values[np.isfinite(values)]
-    if finite.size == 0:
-        warnings_out.append(f"{filename}: required channel {label} contains no finite values.")
-        return fatal_errors, warnings_out
-
-    if np.all(finite == 0):
-        warnings_out.append(f"{filename}: required channel {label} is all zeros.")
-    if require_positive and np.any(finite <= 0):
-        warnings_out.append(f"{filename}: required channel {label} contains non-positive values used in division/log calculations.")
-
-    if finite.size >= 2:
-        span = float(np.nanmax(finite) - np.nanmin(finite))
-        scale = max(float(np.nanmax(np.abs(finite))), 1e-30)
-        if span < scale * 1e-9:
-            warnings_out.append(f"{filename}: required channel {label} is nearly flat.")
-    return fatal_errors, warnings_out
-
-
-def _alignment_structure_warning(entry: dict, signal_key: str, signal_label: str, config: AstraConfig) -> str | None:
-    energy = np.asarray(entry.get("energy"), dtype=float)
-    signal = entry.get(signal_key)
-    if signal is None:
-        return f"{entry.get('filename', 'unknown')}: alignment signal {signal_label} is missing."
-    signal = np.asarray(signal, dtype=float)
-    lo, hi = config.align_window
-    mask = (energy >= lo) & (energy <= hi) & np.isfinite(energy) & np.isfinite(signal)
-    if np.count_nonzero(mask) < 10:
-        return (
-            f"{entry.get('filename', 'unknown')}: alignment signal {signal_label} has fewer than "
-            f"10 finite points in alignment window {lo:g}-{hi:g} eV."
-        )
-    ew = energy[mask]
-    sw = signal[mask]
-    order = np.argsort(ew)
-    ew = ew[order]
-    sw = sw[order]
-    try:
-        derivative = np.gradient(sw, ew)
-    except Exception as exc:
-        return f"{entry.get('filename', 'unknown')}: alignment signal {signal_label} derivative could not be evaluated: {exc}"
-    signal_scale = np.nanmax(sw) - np.nanmin(sw)
-    derivative_range = np.nanmax(derivative) - np.nanmin(derivative)
-    floor = max(signal_scale * 1e-6, 1e-15)
-    if (
-        not np.isfinite(signal_scale)
-        or not np.isfinite(derivative_range)
-        or signal_scale < 1e-15
-        or derivative_range < floor
-    ):
-        return (
-            f"{entry.get('filename', 'unknown')}: selected alignment signal {signal_label} has weak "
-            f"structure in alignment window {lo:g}-{hi:g} eV; alignment may be unreliable."
-        )
-    return None
 
 
 def _validate_processing_inputs(entries: list[dict], config: AstraConfig) -> tuple[list[str], list[str]]:
@@ -305,113 +199,6 @@ def _validate_processing_inputs(entries: list[dict], config: AstraConfig) -> tup
     warnings_out = list(dict.fromkeys(warnings_out))
     fatal_errors = list(dict.fromkeys(fatal_errors))
     return warnings_out, fatal_errors
-
-
-def detect_detector_jumps(
-    energy: np.ndarray,
-    channel: np.ndarray,
-    channel_name: str,
-    config: AstraConfig,
-    filename: str,
-) -> list[dict]:
-    energy = np.asarray(energy, dtype=float)
-    channel = np.asarray(channel, dtype=float)
-    finite_mask = np.isfinite(energy) & np.isfinite(channel)
-    energy_c = energy[finite_mask]
-    channel_c = channel[finite_mask]
-    if len(energy_c) < 20:
-        return []
-    if np.nanstd(channel_c) == 0:
-        return []
-
-    dch = np.abs(np.diff(channel_c))
-    if len(dch) == 0:
-        return []
-
-    threshold = _config_float(config, "detector_jump_threshold", 10.0)
-    min_relative = _config_float(config, "detector_jump_min_relative", 0.05)
-    noise_mad = np.median(np.abs(dch - np.median(dch)))
-    severity_noise_mad = max(float(noise_mad), 1e-12)
-    if noise_mad < 1e-12:
-        noise_mad = np.std(dch) + 1e-12
-    if not np.isfinite(noise_mad) or noise_mad <= 0:
-        return []
-
-    records = []
-    candidate_indices = np.where(dch > threshold * noise_mad)[0]
-    for i in candidate_indices:
-        i = int(i)
-        look_ahead = min(5, len(dch) - i - 1)
-        recovery_window = dch[i + 1 : i + 1 + look_ahead]
-
-        is_spike = len(recovery_window) == 0
-        ch_diff_at_i = channel_c[i + 1] - channel_c[i]
-        if not is_spike:
-            for j in range(len(recovery_window)):
-                ch_diff_at_j = channel_c[i + 2 + j] - channel_c[i + 1 + j]
-                if (
-                    ch_diff_at_j * ch_diff_at_i < 0
-                    and abs(ch_diff_at_j) > (threshold / 3.0) * noise_mad
-                ):
-                    is_spike = True
-                    break
-        if not is_spike:
-            continue
-
-        signal_at_i = max(abs(channel_c[i]), abs(channel_c[i + 1]), 1e-12)
-        relative_jump = dch[i] / signal_at_i
-        if relative_jump < min_relative:
-            continue
-
-        ratio = dch[i] / severity_noise_mad
-        if ratio > 5.0 * threshold:
-            severity = "high"
-        elif ratio > 2.0 * threshold:
-            severity = "medium"
-        else:
-            severity = "low"
-
-        energy_at_jump = float(energy_c[i])
-        e0 = config.e0
-        inside_plot_window = config.plot_energy_min <= energy_at_jump <= config.plot_energy_max
-        inside_alignment_window = config.align_window_min <= energy_at_jump <= config.align_window_max
-        inside_preedge_window = (e0 + config.pre1) <= energy_at_jump <= (e0 + config.pre2)
-        inside_norm_window = (e0 + config.norm1) <= energy_at_jump <= (e0 + config.norm2)
-
-        notes = []
-        if inside_alignment_window:
-            notes.append("in alignment window")
-        if inside_preedge_window:
-            notes.append("in pre-edge window")
-        if inside_norm_window:
-            notes.append("in norm window")
-        if channel_name in ("IF_over_I0", "ln_I0_I1", "ln_I1_I2"):
-            notes.append("derived signal: edge region jumps may be real features")
-
-        records.append({
-            "_index": i,
-            "filename": filename,
-            "channel": channel_name,
-            "energy_eV": energy_at_jump,
-            "jump_size": float(dch[i]),
-            "relative_jump": float(relative_jump),
-            "severity": severity,
-            "inside_plot_window": bool(inside_plot_window),
-            "inside_alignment_window": bool(inside_alignment_window),
-            "inside_preedge_window": bool(inside_preedge_window),
-            "inside_norm_window": bool(inside_norm_window),
-            "note": "; ".join(notes) if notes else "",
-        })
-
-    deduped = []
-    for record in records:
-        if not deduped or record["_index"] - deduped[-1]["_index"] > 3:
-            deduped.append(record)
-        elif record["jump_size"] > deduped[-1]["jump_size"]:
-            deduped[-1] = record
-    for record in deduped:
-        record.pop("_index", None)
-    return deduped
 
 
 def _detector_jump_sort_key(record: dict):
@@ -1264,29 +1051,6 @@ def _write_pdf_qc_report(output_path: Path, context: dict) -> None:
         canvas.restoreState()
 
     doc.build(story, onFirstPage=draw_page_number, onLaterPages=draw_page_number)
-
-
-def _entry_from_scan(scan: dict, config: AstraConfig, path: Path | None = None) -> dict:
-    sigs = compute_signals(scan, config)
-    source_path = Path(path) if path is not None else Path(scan.get("path", scan["filename"]))
-    base_name, replicate_id = split_replicate_suffix(scan["filename"])
-    return {
-        "path": source_path,
-        "filename": scan["filename"],
-        "is_foil": config.foil_keyword.lower() in scan["filename"].lower() if config.foil_keyword else False,
-        "energy": sigs["energy"],
-        "mu_trans": sigs["mu_trans"],
-        "mu_ref": sigs["mu_ref"],
-        "mu_fluo": sigs["mu_fluo"],
-        "I0": scan.get("I0"),
-        "I1": scan.get("I1"),
-        "I2": scan.get("I2"),
-        "IF": scan.get("IF"),
-        "FDT": scan.get("FDT"),
-        "Ir": scan.get("Ir"),
-        "base_name": base_name,
-        "replicate_id": replicate_id,
-    }
 
 
 def _same_file(path_a, path_b) -> bool:
