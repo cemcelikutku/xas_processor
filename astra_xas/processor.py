@@ -26,12 +26,10 @@ from .self_absorption import (
     write_self_absorption_flags,
 )
 
-# Phase 2.1 compatibility re-exports. Removed in Phase 2.2 when consumers
-# (beamtime/watcher.py, beamtime/groups.py) migrate to importing directly
-# from astra_xas.single_scan.
+# Internal use by processor.py functions (process_folder,
+# _validate_processing_inputs, etc.). NOT for external consumers —
+# they import directly from astra_xas.single_scan.
 from .single_scan import (
-    SingleScanResult,
-    process_single_scan,
     _entry_from_scan,
     _analysis_signal_spec,
     _alignment_signal_spec,

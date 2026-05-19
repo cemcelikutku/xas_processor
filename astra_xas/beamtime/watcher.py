@@ -15,7 +15,8 @@ from watchdog.observers import Observer
 
 from astra_xas.config import AstraConfig
 from astra_xas.io import load_xasd, natural_key
-from astra_xas.processor import _entry_from_scan, _validate_processing_inputs, detect_detector_jumps
+from astra_xas.processor import _validate_processing_inputs
+from astra_xas.single_scan import _entry_from_scan, detect_detector_jumps
 
 from .dashboard import render_dashboard
 from .groups import restore_group_registry, update_group_with_entry

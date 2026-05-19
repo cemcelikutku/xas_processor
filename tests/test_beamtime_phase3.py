@@ -16,7 +16,7 @@ from astra_xas.beamtime.replay import replay
 from astra_xas.beamtime.session import read_session_log
 from astra_xas.beamtime.watcher import watch
 from astra_xas.io import load_xasd
-from astra_xas.processor import _entry_from_scan
+from astra_xas.single_scan import _entry_from_scan
 
 
 def _write_scenario(path: Path, source: Path, incoming: Path, interval_s: float = 0.1) -> None:

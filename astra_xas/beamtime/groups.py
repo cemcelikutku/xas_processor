@@ -16,7 +16,8 @@ import matplotlib.pyplot as plt
 from astra_xas.config import AstraConfig
 from astra_xas.export import save_two_col
 from astra_xas.io import load_xasd, natural_key, sanitize_name, split_replicate_suffix
-from astra_xas.processor import _entry_from_scan, _run_pre_edge, interpolate_to_grid
+from astra_xas.processor import _run_pre_edge, interpolate_to_grid
+from astra_xas.single_scan import _entry_from_scan
 
 
 PLOT_DPI = 120
