@@ -7,8 +7,10 @@ from scipy.interpolate import CubicSpline, interp1d
 from larch import Group
 from larch.xafs import pre_edge
 
+from ._config_utils import load_config_json
 from .config import AstraConfig
 from .io import collect_xasd_files, load_xasd, split_replicate_suffix, sanitize_name, build_default_output_directory
+from .manifest import Manifest, ScanEntry, load_manifest
 from .signals import compute_signals, get_signal
 from .alignment import find_best_shift
 from .edge_presets import get_edge_preset
@@ -1096,8 +1098,16 @@ def _write_pdf_qc_report(output_path: Path, context: dict) -> None:
     add_heading("AstraXAS Processing and QC Report")
     story.append(para("Diagnostic report only. Spectra are not recomputed while building this PDF."))
     story.append(Spacer(1, 0.14 * inch))
+    manifest_path_ctx = context.get("manifest_path")
+    manifest_created_ctx = context.get("manifest_created_iso", "")
+    manifest_row_value = (
+        f"{manifest_path_ctx} (created {manifest_created_ctx or 'unknown'})"
+        if manifest_path_ctx
+        else "N/A (folder mode)"
+    )
     add_key_value_table([
         ("ASTRA version", getattr(config, "version", "N/A")),
+        ("Driven by manifest", manifest_row_value),
         ("Input directory", context.get("input_dir", "")),
         ("Output directory", output_dir),
         ("Processing date/time", context.get("processing_datetime", "")),
@@ -1613,8 +1623,145 @@ def save_detector_raw_entry(entry: dict, output_dir: Path) -> Path:
     return out
 
 
-def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, config: AstraConfig | None = None, log=print):
+def _build_entries_from_manifest(
+    manifest: Manifest, config: AstraConfig, log=print
+) -> tuple[list[Path], list[dict]]:
+    """Triage manifest scans by status, verify files exist, and build entries.
+
+    Returns (files, entries) parallel to the folder-mode block:
+      - files: list of resolved .xasd paths actually loaded
+      - entries: list of entry dicts in manifest array order, with
+        ``base_name`` overridden to the manifest group id, ``is_foil``
+        overridden by manifest.is_foil when non-null, and an injected
+        ``_order_in_manifest`` so the grouping sort honours manifest order.
+    """
+    plan: list[tuple[Path, ScanEntry]] = []
+    n_good = n_bad = n_excluded = n_unreviewed = 0
+    missing: list[str] = []
+    for scan in manifest.scans:
+        if scan.status == "good":
+            path = manifest.resolve_scan_path(scan)
+            if not path.exists():
+                missing.append(f"{scan.filename} -> {path}")
+                continue
+            plan.append((path, scan))
+            n_good += 1
+        elif scan.status == "bad":
+            log(f"Manifest: skipping (bad data): {scan.filename}")
+            n_bad += 1
+        elif scan.status == "excluded":
+            log(f"Manifest: skipping (excluded from analysis): {scan.filename}")
+            n_excluded += 1
+        elif scan.status == "unreviewed":
+            n_unreviewed += 1
+
+    if missing:
+        raise RuntimeError(
+            "Manifest references files that do not exist on disk:\n  "
+            + "\n  ".join(missing)
+        )
+    if n_unreviewed:
+        log(
+            f"WARNING: {n_unreviewed} manifest scan(s) are 'unreviewed'; "
+            f"run curation (or mark them 'good') before processing. "
+            f"These scans were skipped for this run."
+        )
+    if n_good == 0:
+        raise RuntimeError("Manifest has no scans with status='good'.")
+
+    log(
+        f"Manifest plan: {n_good} good, {n_bad} bad, "
+        f"{n_excluded} excluded, {n_unreviewed} unreviewed."
+    )
+
+    files = [p for p, _ in plan]
+    entries: list[dict] = []
+    for i, (path, scan) in enumerate(plan):
+        scan_data = load_xasd(path)
+        entry = _entry_from_scan(scan_data, config, path=path)
+        if scan.is_foil is not None:
+            entry["is_foil"] = scan.is_foil
+        if scan.group is not None:
+            entry["base_name"] = scan.group
+        entry["_order_in_manifest"] = i
+        entries.append(entry)
+
+    missing_groups = [
+        entry["filename"]
+        for entry, (_, scan) in zip(entries, plan)
+        if not entry["is_foil"] and scan.group is None
+    ]
+    if missing_groups:
+        raise RuntimeError(
+            "Manifest mode requires non-foil scans with status='good' to have "
+            "a non-null 'group' field. The following scans are missing groups:\n  "
+            + "\n  ".join(missing_groups)
+        )
+    return files, entries
+
+
+def process_folder(
+    input_dir: str | Path | None = None,
+    output_dir: str | Path | None = None,
+    config: AstraConfig | None = None,
+    *,
+    session: str | Path | None = None,
+    log=print,
+):
+    manifest: Manifest | None = None
+    manifest_path: Path | None = None
+    if session is not None:
+        if input_dir is not None:
+            raise RuntimeError(
+                "process_folder: provide either input_dir or session, not both."
+            )
+        if config is not None:
+            raise RuntimeError(
+                "process_folder: provide either config or session, not both "
+                "(the manifest specifies its own config)."
+            )
+        manifest_path = Path(session).expanduser().resolve()
+        manifest = load_manifest(manifest_path)
+
+        if manifest.config.source == "inline":
+            raise RuntimeError(
+                "config.source='inline' is reserved for v2; manifest schema v1 "
+                "accepts but does not apply inline configs. Use config.source='path'."
+            )
+
+        config_path = manifest.resolve_config_path()
+        if config_path is None or not config_path.exists():
+            raise RuntimeError(
+                f"Manifest references a config that does not exist: {config_path}"
+            )
+        try:
+            config = load_config_json(config_path)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Could not load manifest config {config_path}: {exc}"
+            ) from exc
+
+        input_dir = manifest.resolve_base_dir()
+
+        if _as_clean_list(getattr(config, "exclude_filenames", ())) or _as_clean_list(
+            getattr(config, "exclude_filename_contains", ())
+        ):
+            log(
+                "Manifest mode: bulk filename exclusions in config "
+                "(exclude_filenames, exclude_filename_contains) are ignored; "
+                "use manifest status='excluded' instead."
+            )
+
+        n_assigned_foil_overrides = sum(1 for s in manifest.scans if s.assigned_foil)
+        if n_assigned_foil_overrides:
+            log(
+                f"Manifest field 'assigned_foil' is reserved for v2 and ignored "
+                f"in this run (set on {n_assigned_foil_overrides} scan(s))."
+            )
+
     config = config or AstraConfig()
+    if input_dir is None:
+        raise RuntimeError("process_folder: input_dir or session is required.")
     input_dir = Path(input_dir).expanduser().resolve()
     if output_dir is None:
         output_dir = build_default_output_directory(input_dir)
@@ -1657,17 +1804,21 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
     warnings: list[str] = []
     validation_warnings: list[str] = []
     log(f"Starting {config.version}")
+    if manifest is not None:
+        log(f"Driven by session manifest: {manifest_path} (created {manifest.created_iso or 'unknown'})")
     log(f"Input directory: {input_dir}")
     log(f"Output directory: {output_dir}")
 
-    files = collect_xasd_files(input_dir)
-    if not files:
-        raise RuntimeError(f"No .xasd files found in: {input_dir}")
-
-    entries = []
-    for path in files:
-        scan = load_xasd(path)
-        entries.append(_entry_from_scan(scan, config, path=path))
+    if manifest is not None:
+        files, entries = _build_entries_from_manifest(manifest, config, log=log)
+    else:
+        files = collect_xasd_files(input_dir)
+        if not files:
+            raise RuntimeError(f"No .xasd files found in: {input_dir}")
+        entries = []
+        for path in files:
+            scan = load_xasd(path)
+            entries.append(_entry_from_scan(scan, config, path=path))
 
     detector_raw_files = []
     for e in entries:
@@ -1680,27 +1831,30 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
     if detector_raw_files:
         log(f"Saved detector raw exports: {len(detector_raw_files)} file(s) in {output_dir / 'detector_raw'}")
 
-    # Manual exclusions before alignment.
-    exclude_filenames = set(_as_clean_list(getattr(config, "exclude_filenames", ())))
-    exclude_contains = _as_clean_list(getattr(config, "exclude_filename_contains", ()))
+    # Manual exclusions before alignment. Bypassed in manifest mode (status='excluded' replaces it).
+    exclude_filenames: set[str] = set()
+    exclude_contains: list[str] = []
     excluded_entries = []
     auto_shift_rejected_entries = []
     auto_outlier_entries = []
 
-    if exclude_filenames or exclude_contains:
-        kept_entries = []
-        for e in entries:
-            fname = e["filename"]
-            exact_match = fname in exclude_filenames
-            contains_match = any(pattern in fname for pattern in exclude_contains)
-            if exact_match or contains_match:
-                reason = "exact filename" if exact_match else "filename contains"
-                e["exclude_reason"] = reason
-                excluded_entries.append(e)
-                log(f"Excluding scan: {fname} ({reason})")
-            else:
-                kept_entries.append(e)
-        entries = kept_entries
+    if manifest is None:
+        exclude_filenames = set(_as_clean_list(getattr(config, "exclude_filenames", ())))
+        exclude_contains = _as_clean_list(getattr(config, "exclude_filename_contains", ()))
+        if exclude_filenames or exclude_contains:
+            kept_entries = []
+            for e in entries:
+                fname = e["filename"]
+                exact_match = fname in exclude_filenames
+                contains_match = any(pattern in fname for pattern in exclude_contains)
+                if exact_match or contains_match:
+                    reason = "exact filename" if exact_match else "filename contains"
+                    e["exclude_reason"] = reason
+                    excluded_entries.append(e)
+                    log(f"Excluding scan: {fname} ({reason})")
+                else:
+                    kept_entries.append(e)
+            entries = kept_entries
 
     if not entries:
         raise RuntimeError("No .xasd files remain after applying manual exclusions.")
@@ -2574,6 +2728,8 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
                 "total_manual_range_interpolated_points": total_manual_range_interpolated_points,
                 "overview_dir": overview_dir,
                 "replicate_qc_dir": replicate_qc_dir,
+                "manifest_path": manifest_path,
+                "manifest_created_iso": manifest.created_iso if manifest is not None else "",
             })
             pdf_report_status = {"status": "created", "path": pdf_path, "error": ""}
             log(f"Saved PDF QC report: {pdf_path}")
@@ -2583,6 +2739,11 @@ def process_folder(input_dir: str | Path, output_dir: str | Path | None = None, 
 
     with open(output_dir / "ASTRA_processing_report.txt", "w", encoding="utf-8") as f:
         f.write(f"{config.version}\n")
+        if manifest is not None:
+            f.write(
+                f"Driven by manifest: {manifest_path} "
+                f"(created {manifest.created_iso or 'unknown'})\n"
+            )
         f.write(f"Input directory: {input_dir}\nOutput directory: {output_dir}\n")
         f.write(f"Files found: {len(files)}\n")
         f.write("\nValidation warnings:\n")

@@ -30,10 +30,44 @@ def _resolve_config(args: argparse.Namespace) -> AstraConfig:
     return config
 
 
+def _warn_session_overrides(args: argparse.Namespace) -> None:
+    """Emit per-flag warnings when CLI overrides are passed alongside --session.
+
+    In session mode the manifest is the source of truth for config; CLI flags
+    are accepted by argparse but ignored. We warn rather than reject so that
+    shell history / scripted invocations still work.
+    """
+    suffix = "manifest config is the source of truth in session mode"
+    if args.config is not None:
+        print(f"WARNING: ignoring --config {args.config} ({suffix})", file=sys.stderr)
+    if args.mode is not None:
+        print(f"WARNING: ignoring --mode {args.mode} ({suffix})", file=sys.stderr)
+    if args.foil_mode is not None:
+        print(f"WARNING: ignoring --foil-mode {args.foil_mode} ({suffix})", file=sys.stderr)
+    if args.e0 is not None:
+        print(f"WARNING: ignoring --e0 {args.e0} ({suffix})", file=sys.stderr)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Process ASTRA fluorescence XAS .xasd files with foil drift correction.")
-    parser.add_argument("input_dir", help="Folder containing .xasd files")
+    parser.add_argument(
+        "input_dir",
+        nargs="?",
+        default=None,
+        help="Folder containing .xasd files. Omit when --session is provided.",
+    )
     parser.add_argument("-o", "--output-dir", default=None, help="Output folder. Default: <input>-processed")
+    parser.add_argument(
+        "-s",
+        "--session",
+        type=Path,
+        default=None,
+        help=(
+            "Path to a session manifest JSON. When provided, drives processing "
+            "from the manifest: input_dir, --config, and per-field overrides "
+            "(--mode, --foil-mode, --e0) are ignored with a warning."
+        ),
+    )
     parser.add_argument(
         "-c",
         "--config",
@@ -64,6 +98,21 @@ def main():
         help="Edge energy in eV. Default: 7121.030 (or value from --config).",
     )
     args = parser.parse_args()
+
+    if args.session is not None:
+        if args.input_dir is not None:
+            print(
+                "ERROR: positional input_dir is not allowed when --session is provided.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        _warn_session_overrides(args)
+        process_folder(session=args.session, output_dir=args.output_dir)
+        return
+
+    if args.input_dir is None:
+        parser.error("input_dir is required when --session is not provided.")
+
     try:
         config = _resolve_config(args)
     except (OSError, json.JSONDecodeError, ValueError) as exc:

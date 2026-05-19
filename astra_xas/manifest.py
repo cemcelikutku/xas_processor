@@ -29,8 +29,21 @@ Schema overview (v1):
     (relative to ``input.base_dir``), ``status``, optional ``is_foil``
     override, optional ``group`` reference, optional ``assigned_foil``
     (reserved for v2), ``comments[]``, and an optional ``qc`` snapshot.
+
+    The order of ``scans[]`` is significant: within each group, scans
+    are processed (and merged) in the order they appear in this array.
+    This overrides the default folder-mode behaviour of sorting by the
+    ``_NN`` replicate suffix.
+
+    ``is_foil`` overrides ``AstraConfig.foil_keyword`` filename inference
+    when non-null. ``true`` forces foil treatment; ``false`` forces
+    sample treatment; ``null`` falls back to the filename heuristic.
+
   - ``groups[]``: list of group definitions with stable ``id`` and
-    human-facing ``label``/``comment``.
+    human-facing ``label``/``comment``. **Output filenames in manifest
+    mode derive from ``id``, not ``label``.** Choose ``id`` to be a
+    safe filename token (alphanumerics, dashes, underscores); use
+    ``label`` for the human-facing display name.
 
 The ``status`` field is *human curation*:
     - ``"unreviewed"`` — default, watcher-produced, awaiting review.
